@@ -37,6 +37,7 @@ add_executable(tori_kernel
     src/log/log.cpp
     src/memory/address.cpp
     src/memory/allocator.cpp
+    src/memory/heap.cpp
     src/memory/memory_map.cpp
     src/memory/pmm.cpp
     src/memory/slice_allocator.cpp

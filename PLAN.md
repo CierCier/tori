@@ -116,7 +116,6 @@ Current memory policy:
 
 Deferred memory work:
 
-- kernel heap;
 - virtual memory manager;
 - page table ownership and remapping policy.
 - reclaim ACPI reclaimable pages after ACPI handling is safe.
@@ -162,8 +161,8 @@ Status: **in progress**
 - [x] Add a small kernel allocation facade.
 - [x] Copy boot memory map into allocator-owned kernel storage.
 - [x] Add boot-time smoke tests for page, contiguous page, and slice allocation.
-- [ ] Add early kernel heap for larger variable-sized allocations after the page and slice layers are stable.
-- [ ] Add basic virtual memory ownership model.
+- [x] Add early kernel heap for larger variable-sized allocations after the page and slice layers are stable.
+- [x] Add basic virtual memory ownership model (vmem_layout.hpp with kernel image region, HHDM awareness, address space constants).
 - [ ] Add testable pure logic for memory region conversion and allocation edge cases where practical.
 
 ### Milestone 3: ACPI And Platform Discovery

@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #include <tori/kernel/address.hpp>
+#include <tori/kernel/heap.hpp>
 #include <tori/kernel/pmm.hpp>
 #include <tori/kernel/slice_allocator.hpp>
 
@@ -11,6 +12,8 @@ namespace {
 uint64_t page_count_for_size(size_t size) {
     return (static_cast<uint64_t>(size) + tori::memory::pmm::page_size - 1) / tori::memory::pmm::page_size;
 }
+
+constexpr size_t heap_threshold = 1024 * 1024;
 
 } // namespace
 
@@ -23,6 +26,10 @@ void* kalloc(size_t size, size_t alignment) {
 
     if (size <= 2048 && alignment <= 16) {
         return slice::alloc(size, alignment);
+    }
+
+    if (size <= heap_threshold) {
+        return heap::alloc(size, alignment);
     }
 
     if (alignment > pmm::page_size) {
@@ -45,6 +52,11 @@ void kfree(void* pointer, size_t size) {
 
     if (size <= 2048) {
         slice::free(pointer, size);
+        return;
+    }
+
+    if (heap::contains(pointer)) {
+        heap::free(pointer);
         return;
     }
 

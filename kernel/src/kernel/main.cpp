@@ -1,10 +1,12 @@
 #include <tori/kernel/kernel.hpp>
 
 #include <tori/kernel/allocator.hpp>
+#include <tori/kernel/heap.hpp>
 #include <tori/kernel/log.hpp>
 #include <tori/kernel/memory_map.hpp>
 #include <tori/kernel/pmm.hpp>
 #include <tori/kernel/slice_allocator.hpp>
+#include <tori/kernel/vmem_layout.hpp>
 
 #include "../arch/x86_64/halt.hpp"
 
@@ -76,6 +78,50 @@ void smoke_test_pmm() {
     tori::memory::pmm::free_page(reused);
     tori::memory::pmm::free_page(second);
     tori::memory::pmm::free_pages(contiguous, 3);
+}
+
+void smoke_test_heap() {
+    void* block_4k = tori::memory::heap::alloc(4096, 16);
+    void* block_8k = tori::memory::heap::alloc(8192, 16);
+    void* block_256 = tori::memory::heap::alloc(256, 64);
+
+    if (block_4k == nullptr || block_8k == nullptr || block_256 == nullptr) {
+        TORI_PANIC("heap", "heap allocator could not allocate smoke-test blocks");
+    }
+
+    if ((reinterpret_cast<uint64_t>(block_256) & 63) != 0) {
+        TORI_PANIC("heap", "heap allocator did not respect 64-byte alignment");
+    }
+
+    TORI_LOG_VALUE(tori::log::Level::Info, "heap", "smoke 4K block", reinterpret_cast<uint64_t>(block_4k));
+    TORI_LOG_VALUE(tori::log::Level::Info, "heap", "smoke 8K block", reinterpret_cast<uint64_t>(block_8k));
+    TORI_LOG_VALUE(tori::log::Level::Info, "heap", "smoke 256B aligned block", reinterpret_cast<uint64_t>(block_256));
+
+    tori::memory::heap::free(block_4k);
+    void* reused = tori::memory::heap::alloc(4096, 16);
+    if (reused == nullptr) {
+        TORI_PANIC("heap", "heap allocator could not reuse freed memory");
+    }
+    TORI_LOG_VALUE(tori::log::Level::Info, "heap", "smoke reused block", reinterpret_cast<uint64_t>(reused));
+
+    tori::memory::heap::free(reused);
+    tori::memory::heap::free(block_8k);
+    tori::memory::heap::free(block_256);
+
+    const tori::memory::heap::Stats heap_stats = tori::memory::heap::stats();
+    TORI_LOG_VALUE(tori::log::Level::Info, "heap", "total bytes", heap_stats.total_bytes);
+    TORI_LOG_VALUE(tori::log::Level::Info, "heap", "free bytes", heap_stats.free_bytes);
+    TORI_LOG_VALUE(tori::log::Level::Info, "heap", "used bytes", heap_stats.used_bytes);
+    TORI_LOG_VALUE(tori::log::Level::Info, "heap", "free blocks", heap_stats.free_blocks);
+    TORI_LOG_VALUE(tori::log::Level::Info, "heap", "backing pages", heap_stats.backing_pages);
+    TORI_LOG_VALUE(tori::log::Level::Info, "heap", "failed allocations", heap_stats.failed_allocations);
+}
+
+void log_vmem_layout() {
+    TORI_LOG_VALUE(tori::log::Level::Info, "vmem", "kernel image start", tori::memory::vmem::kernel_image_start());
+    TORI_LOG_VALUE(tori::log::Level::Info, "vmem", "kernel image size", tori::memory::vmem::kernel_image_size());
+    TORI_LOG_VALUE(tori::log::Level::Info, "vmem", "kernel image end", tori::memory::vmem::kernel_image_end());
+    TORI_LOG_VALUE(tori::log::Level::Info, "vmem", "is kernel address check", tori::memory::vmem::is_kernel_address(0xFFFFFFFF80000000ull) ? 1ULL : 0ULL);
 }
 
 void smoke_test_slice_allocator() {
@@ -170,9 +216,12 @@ namespace tori {
     memory::pmm::init(owned_boot_info);
     smoke_test_pmm();
     memory::slice::init(owned_boot_info.hhdm_offset);
+    memory::heap::init();
     owned_boot_info.memory_map = copy_memory_map(owned_boot_info.memory_map);
     smoke_test_slice_allocator();
-    TORI_LOG_INFO("kernel", "owned boot data and allocation path complete; halting");
+    log_vmem_layout();
+    smoke_test_heap();
+    TORI_LOG_INFO("kernel", "owned boot data, heap, and vmem layout complete; halting");
 
     arch::x86_64::halt_forever();
 }
