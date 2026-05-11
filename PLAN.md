@@ -167,15 +167,15 @@ Status: **in progress**
 
 ### Milestone 3: ACPI And Platform Discovery
 
-Status: **next**
+Status: **in progress**
 
-- [ ] Validate RSDP checksum and extended checksum.
-- [ ] Parse XSDT with RSDT fallback.
-- [ ] Validate ACPI table checksums before use.
-- [ ] Add ACPI table lookup API.
-- [ ] Log core table presence: MADT/APIC, FACP, HPET when present.
-- [ ] Decide when ACPI reclaimable memory can safely be released.
-- [ ] Keep parser logic separate from platform policy.
+- [x] Validate RSDP checksum and extended checksum.
+- [x] Parse XSDT with RSDT fallback.
+- [x] Validate ACPI table checksums before use.
+- [x] Add ACPI table lookup API.
+- [x] Log core table presence: MADT/APIC, FACP, HPET when present.
+- [x] Decide when ACPI reclaimable memory can safely be released.
+- [x] Keep parser logic separate from platform policy.
 
 ### Milestone 4: CPU Runtime
 

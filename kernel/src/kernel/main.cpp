@@ -1,5 +1,6 @@
 #include <tori/kernel/kernel.hpp>
 
+#include <tori/kernel/acpi.hpp>
 #include <tori/kernel/allocator.hpp>
 #include <tori/kernel/heap.hpp>
 #include <tori/kernel/log.hpp>
@@ -78,6 +79,31 @@ void smoke_test_pmm() {
     tori::memory::pmm::free_page(reused);
     tori::memory::pmm::free_page(second);
     tori::memory::pmm::free_pages(contiguous, 3);
+}
+
+void init_acpi(const tori::boot::BootInfo& boot_info) {
+    if (!boot_info.has_rsdp || boot_info.rsdp == nullptr) {
+        TORI_LOG_WARN("acpi", "no RSDP provided by bootloader");
+        return;
+    }
+
+    auto* rsdp = static_cast<const tori::acpi::RSDP*>(boot_info.rsdp);
+    const tori::acpi::Info info = tori::acpi::enumerate(rsdp);
+
+    if (!info.rsdp_checksum_valid) {
+        TORI_LOG_WARN("acpi", "ACPI RSDP is invalid; ACPI unavailable");
+        return;
+    }
+
+    TORI_LOG_VALUE(tori::log::Level::Info, "acpi", "xsdt entry count", info.xsdt_entry_count);
+    TORI_LOG_VALUE(tori::log::Level::Info, "acpi", "madt present", info.madt_found ? 1ULL : 0ULL);
+    TORI_LOG_VALUE(tori::log::Level::Info, "acpi", "fadt present", info.fadt_found ? 1ULL : 0ULL);
+    TORI_LOG_VALUE(tori::log::Level::Info, "acpi", "hpet present", info.hpet_found ? 1ULL : 0ULL);
+
+    // ACPI reclaimable memory stays reserved for now: we have not copied
+    // any table data into kernel-owned storage, so firmware tables must
+    // remain accessible. Release will be safe once table data is copied
+    // or protected by proper VMM page ownership.
 }
 
 void smoke_test_heap() {
@@ -220,8 +246,9 @@ namespace tori {
     owned_boot_info.memory_map = copy_memory_map(owned_boot_info.memory_map);
     smoke_test_slice_allocator();
     log_vmem_layout();
+    init_acpi(owned_boot_info);
     smoke_test_heap();
-    TORI_LOG_INFO("kernel", "owned boot data, heap, and vmem layout complete; halting");
+    TORI_LOG_INFO("kernel", "boot, memory, and ACPI initialization complete; halting");
 
     arch::x86_64::halt_forever();
 }

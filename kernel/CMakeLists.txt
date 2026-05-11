@@ -41,6 +41,7 @@ add_executable(tori_kernel
     src/memory/memory_map.cpp
     src/memory/pmm.cpp
     src/memory/slice_allocator.cpp
+    src/platform/uefi_pc/acpi.cpp
     src/runtime/memory.cpp
 )
 
