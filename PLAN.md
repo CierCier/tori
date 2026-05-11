@@ -1,0 +1,232 @@
+# Tori Kernel Plan
+
+## Summary
+
+Tori is a freestanding 64-bit higher-half hobby kernel for UEFI-class systems. The first boot path uses Limine on x86_64, but the kernel is designed around Tori-owned abstractions so future boot sources and CPU architectures can be added without rewriting generic kernel subsystems.
+
+The repository is a CMake superproject with distinct workspaces for the kernel, future libc, future userspace, shared ABI headers, toolchain helpers, third-party dependencies, static ISO payload files, and documentation.
+
+Milestone 1 produced a bootable kernel that:
+
+- is loaded by Limine as a higher-half x86_64 ELF kernel;
+- converts Limine boot data into an internal `BootInfo`;
+- enters generic `kernel_main`;
+- initializes serial and framebuffer logging;
+- parses and validates the boot memory map;
+- prints useful boot diagnostics;
+- reclaims usable and bootloader-reclaimable memory into a page allocator;
+- initializes a slice allocator backed by page allocations;
+- copies boot memory map data into allocator-owned kernel storage;
+- halts cleanly or panics with visible diagnostics.
+
+## Architecture
+
+Tori uses a portable core with target adapters.
+
+- `kernel/src/boot/limine` owns Limine requests, responses, and protocol validation.
+- `kernel/src/boot` owns Tori's stable internal boot model.
+- `kernel/src/arch/x86_64` owns CPU-specific primitives and assembly glue.
+- `kernel/src/platform/uefi_pc` owns UEFI PC platform assumptions.
+- `kernel/src/kernel` owns architecture-independent initialization and runtime flow.
+- `kernel/src/log` owns kernel logging.
+- `kernel/src/memory` owns memory map modeling and later allocators.
+- `kernel/targets/x86_64-limine` owns target build glue, linker script, Limine config, boot image layout, and emulator helpers.
+- `libc` is reserved for the future userspace C library and is not a kernel dependency.
+- `userspace` is reserved for future applications, services, and userspace libraries.
+- `shared` contains only ABI-safe declarations that intentionally cross the kernel/userspace boundary.
+- `toolchain` contains reusable CMake/toolchain configuration.
+- `third_party/limine` contains the Limine dependency when it is imported.
+- `third_party/limine-protocol` contains the kernel-facing Limine protocol header.
+- `iso/boot` contains static boot files copied into the ISO root.
+- `iso/rootfs` contains the initial root filesystem payload copied into the ISO root.
+
+Generic kernel code must not include Limine headers, UEFI types, or x86-only helpers directly. The intended handoff is:
+
+```cpp
+extern "C" void limine_entry();
+
+void limine_entry() {
+    tori::boot::BootInfo info = tori::boot::limine::collect_boot_info();
+    tori::kernel_main(info);
+}
+```
+
+The exact function names may change during implementation, but the dependency direction must not: target adapters call into the generic kernel after converting external data into internal Tori types.
+
+## Boot Model
+
+`BootInfo` is the stable contract between boot adapters and the generic kernel. It should contain:
+
+- boot source identifier, initially `Limine`;
+- kernel physical and virtual image ranges;
+- higher-half direct map base when available;
+- Tori-owned memory map descriptors;
+- framebuffer address, dimensions, pitch, and pixel format;
+- RSDP/ACPI pointer when available;
+- boot module list, even if unused in Milestone 1;
+- command line string when available;
+- boot diagnostics flags for missing or degraded boot data.
+
+Milestone 1 should request and validate Limine memory map, framebuffer, HHDM, kernel address, RSDP, and modules. Missing memory map is fatal. Missing framebuffer degrades to serial-only logging when serial output is available.
+
+## Logging
+
+Tori treats logging as a first-class kernel subsystem.
+
+The public logging API should support levels such as trace, debug, info, warn, error, and panic. Call sites should not know whether output is going to serial, framebuffer, a ring buffer, or future debug tools.
+
+Implementation is staged:
+
+1. **Phase 1: early synchronous logging**
+   - heapless formatting;
+   - serial sink;
+   - framebuffer console sink;
+   - levels, categories, source file and line;
+   - panic-safe output path;
+   - basic color support for framebuffer output.
+
+2. **Phase 2: buffered logging**
+   - fixed-size global ring buffer;
+   - sink masks;
+   - boot log replay when sinks initialize;
+   - structured fields where useful without requiring heap allocation.
+
+3. **Phase 3: scheduler-aware logging**
+   - per-CPU buffers;
+   - deferred flushing;
+   - post-boot log retrieval through a debug shell or equivalent diagnostic interface.
+
+Milestone 1 implements the Phase 1 foundation and designs APIs so Phases 2 and 3 do not require changing normal log call sites.
+
+## Memory
+
+The kernel currently has two allocation layers:
+
+- **Page allocator:** PMM-backed 4 KiB physical page allocation, including contiguous page runs.
+- **Slice allocator:** fixed-size object allocation for small kernel objects, backed by PMM pages and HHDM virtual addresses.
+- **Allocation facade:** `kalloc`/`kfree`, routing small allocations to slices and larger allocations to contiguous pages.
+
+Current memory policy:
+
+- usable memory is allocatable;
+- Limine bootloader-reclaimable memory is reclaimed;
+- page zero is reserved;
+- kernel image, modules, framebuffer, reserved, bad, and unknown memory stay reserved;
+- ACPI reclaimable memory stays reserved until ACPI table parsing/copying exists.
+
+Deferred memory work:
+
+- kernel heap;
+- virtual memory manager;
+- page table ownership and remapping policy.
+- reclaim ACPI reclaimable pages after ACPI handling is safe.
+
+## Milestone Tracker
+
+### Milestone 1: Boot And Diagnostics
+
+Status: **complete**
+
+- [x] Add CMake freestanding build using Clang and LLD.
+- [x] Keep the root CMake project split into `kernel`, `libc`, `userspace`, and `shared` workspaces.
+- [x] Add Limine boot image support for QEMU/OVMF.
+- [x] Build Limine from the submodule and copy required UEFI files into the staged ISO root.
+- [x] Add xorriso ISO generation.
+- [x] Add QEMU/OVMF run helper and CMake run targets.
+- [x] Add higher-half x86_64 linker layout.
+- [x] Add minimal entry code and generic `kernel_main`.
+- [x] Add internal `BootInfo`.
+- [x] Add serial and framebuffer logging.
+- [x] Parse and summarize memory map.
+- [x] Halt or panic cleanly.
+
+Acceptance criteria:
+
+- [x] QEMU boots the kernel through Limine and OVMF.
+- [x] Serial output contains a deterministic boot banner and memory summary.
+- [x] Framebuffer output shows the same core diagnostics when available.
+- [x] Generic kernel code does not depend on Limine headers.
+- [x] Kernel code does not link against the future `libc` workspace.
+
+### Milestone 2: Memory Foundation
+
+Status: **in progress**
+
+- [x] Add physical page allocator based on the parsed memory map.
+- [x] Reclaim usable and Limine bootloader-reclaimable pages.
+- [x] Keep ACPI reclaimable memory reserved until ACPI parsing exists.
+- [x] Reserve page zero.
+- [x] Add contiguous page allocation and freeing.
+- [x] Add HHDM physical/virtual address helpers.
+- [x] Add slice allocator for small kernel objects.
+- [x] Add a small kernel allocation facade.
+- [x] Copy boot memory map into allocator-owned kernel storage.
+- [x] Add boot-time smoke tests for page, contiguous page, and slice allocation.
+- [ ] Add early kernel heap for larger variable-sized allocations after the page and slice layers are stable.
+- [ ] Add basic virtual memory ownership model.
+- [ ] Add testable pure logic for memory region conversion and allocation edge cases where practical.
+
+### Milestone 3: ACPI And Platform Discovery
+
+Status: **next**
+
+- [ ] Validate RSDP checksum and extended checksum.
+- [ ] Parse XSDT with RSDT fallback.
+- [ ] Validate ACPI table checksums before use.
+- [ ] Add ACPI table lookup API.
+- [ ] Log core table presence: MADT/APIC, FACP, HPET when present.
+- [ ] Decide when ACPI reclaimable memory can safely be released.
+- [ ] Keep parser logic separate from platform policy.
+
+### Milestone 4: CPU Runtime
+
+Status: **planned**
+
+- Add GDT/IDT setup.
+- Add exception handlers with panic diagnostics.
+- Add timer support.
+- Add interrupt-safe logging behavior.
+
+### Milestone 5: Extended Platform Discovery
+
+- Parse ACPI enough to discover core platform tables.
+- Prepare for APIC and SMP discovery.
+- Keep platform parsing isolated from generic kernel policy.
+
+### Milestone 6: Scheduling And Kernel Services
+
+- Add task/thread representation.
+- Add scheduler foundation.
+- Add synchronization primitives.
+- Upgrade logging to per-CPU/deferred behavior.
+
+### Milestone 7: User Boundary
+
+- Define user/kernel address split.
+- Add syscall or message-passing entry path.
+- Add first user-mode execution experiment.
+
+## Test Plan
+
+Early verification should focus on deterministic boot feedback:
+
+- CMake configure succeeds with Clang.
+- Kernel links with LLD using the target linker script.
+- QEMU/OVMF boots the Limine image.
+- Serial log includes boot source, kernel range, HHDM base, framebuffer status, and memory map summary.
+- Framebuffer console displays boot banner and diagnostics when available.
+- A forced missing-framebuffer path still logs over serial.
+- A forced missing-memory-map path panics before generic initialization proceeds.
+
+Later milestones should add unit-testable pure logic for memory map conversion, logging format behavior, ring buffer behavior, and allocator invariants.
+
+## Defaults And Assumptions
+
+- Project and namespace name: Tori.
+- First target: `x86_64 + Limine + UEFI PC`.
+- Repository layout uses separate `kernel`, `libc`, `userspace`, and `shared` workspaces from the start.
+- Boot protocol abstraction is required from Milestone 1.
+- Future architecture ports are possible, so generic kernel code must stay architecture-neutral.
+- Kernel is higher-half from the first bootable milestone.
+- C++ is freestanding and restricted: no exceptions, RTTI, hosted standard library, or early heap assumptions.
+- VGA text mode is not a primary output path.

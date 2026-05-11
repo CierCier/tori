@@ -1,0 +1,21 @@
+build/
+out/
+
+# CMake and generated boot artifacts
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+*.iso
+*.img
+OVMF_VARS*.fd
+
+# Local caches
+.cache/
+.superpowers/
+
+# Editors and OS noise
+*.swp
+*.swo
+*~
+.DS_Store
