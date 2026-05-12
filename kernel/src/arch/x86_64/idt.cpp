@@ -2,6 +2,7 @@
 
 #include <config.h>
 #include <tori/kernel/gdt.hpp>
+#include <tori/kernel/lapic.hpp>
 #include <tori/kernel/log.hpp>
 
 #include "io.hpp"
@@ -12,29 +13,29 @@ using namespace tori::arch::x86_64;
 
 // IDT entry (16 bytes)
 struct [[gnu::packed]] IDTEntry {
-    uint16_t offset_low;
-    uint16_t selector;
-    uint8_t  ist;
-    uint8_t  type_attr;
-    uint16_t offset_mid;
-    uint32_t offset_high;
-    uint32_t zero;
+  uint16_t offset_low;
+  uint16_t selector;
+  uint8_t ist;
+  uint8_t type_attr;
+  uint16_t offset_mid;
+  uint32_t offset_high;
+  uint32_t zero;
 };
 
 // IDTR for lidt
 struct [[gnu::packed]] IDTR {
-    uint16_t limit;
-    uint64_t base;
+  uint16_t limit;
+  uint64_t base;
 };
 
 // ISR stub table populated by interrupts_asm.S
-extern "C" void* isr_stub_table[256];
+extern "C" void *isr_stub_table[256];
 
 // IDT entries
 alignas(16) IDTEntry idt[256] = {};
 
 // Exception names
-const char* exception_names[32] = {
+const char *exception_names[32] = {
     "divide-by-zero",
     "debug",
     "non-maskable-interrupt",
@@ -71,178 +72,157 @@ const char* exception_names[32] = {
 
 volatile uint64_t timer_tick = 0;
 
-const char* exception_name(uint8_t vec) {
-    if (vec < 32) {
-        return exception_names[vec];
-    }
-    return nullptr;
+const char *exception_name(uint8_t vec) {
+  if (vec < 32) {
+    return exception_names[vec];
+  }
+  return nullptr;
 }
 
-void dump_frame(const InterruptFrame* frame) {
-    TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "vector", frame->vector);
-    if (frame->vector < 32) {
-        TORI_LOG_TEXT_VALUE(tori::log::Level::Panic, "isr", "exception", exception_names[frame->vector]);
-    }
-    TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "error_code", frame->error_code);
-    TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "rip", frame->rip);
-    TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "cs", frame->cs);
-    TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "rflags", frame->rflags);
-    TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "rax", frame->rax);
-    TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "rbx", frame->rbx);
-    TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "rcx", frame->rcx);
-    TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "rdx", frame->rdx);
-    TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "rsi", frame->rsi);
-    TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "rdi", frame->rdi);
-    TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "rbp", frame->rbp);
-    TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "r8", frame->r8);
-    TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "r9", frame->r9);
-    TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "r10", frame->r10);
-    TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "r11", frame->r11);
-    TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "r12", frame->r12);
-    TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "r13", frame->r13);
-    TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "r14", frame->r14);
-    TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "r15", frame->r15);
+void dump_frame(const InterruptFrame *frame) {
+  TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "vector", frame->vector);
+  if (frame->vector < 32) {
+    TORI_LOG_TEXT_VALUE(tori::log::Level::Panic, "isr", "exception",
+                        exception_names[frame->vector]);
+  }
+  TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "error_code",
+                 frame->error_code);
+  TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "rip", frame->rip);
+  TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "cs", frame->cs);
+  TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "rflags", frame->rflags);
+  TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "rax", frame->rax);
+  TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "rbx", frame->rbx);
+  TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "rcx", frame->rcx);
+  TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "rdx", frame->rdx);
+  TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "rsi", frame->rsi);
+  TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "rdi", frame->rdi);
+  TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "rbp", frame->rbp);
+  TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "r8", frame->r8);
+  TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "r9", frame->r9);
+  TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "r10", frame->r10);
+  TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "r11", frame->r11);
+  TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "r12", frame->r12);
+  TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "r13", frame->r13);
+  TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "r14", frame->r14);
+  TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "r15", frame->r15);
 }
 
-void handle_exception(InterruptFrame* frame) {
-    dump_frame(frame);
+void handle_exception(InterruptFrame *frame) {
+  dump_frame(frame);
 
-    if (frame->vector == 14) {
-        // Page fault: dump CR2
-        uint64_t cr2 = 0;
-        asm volatile("mov %%cr2, %0" : "=r"(cr2));
-        TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "cr2", cr2);
+  if (frame->vector == 14) {
+    // Page fault: dump CR2
+    uint64_t cr2 = 0;
+    asm volatile("mov %%cr2, %0" : "=r"(cr2));
+    TORI_LOG_VALUE(tori::log::Level::Panic, "isr", "cr2", cr2);
 
-        // Bits in error code: P=present(1), W=write(2), U=user(4), RSVD=8, ID=16
-        TORI_LOG_TEXT_VALUE(tori::log::Level::Panic, "isr", "page_fault_type",
-            (frame->error_code & 1) ? "protection-violation" : "non-present");
-        TORI_LOG_TEXT_VALUE(tori::log::Level::Panic, "isr", "access",
-            (frame->error_code & 2) ? "write" : "read");
-    }
+    // Bits in error code: P=present(1), W=write(2), U=user(4), RSVD=8, ID=16
+    TORI_LOG_TEXT_VALUE(tori::log::Level::Panic, "isr", "page_fault_type",
+                        (frame->error_code & 1) ? "protection-violation"
+                                                : "non-present");
+    TORI_LOG_TEXT_VALUE(tori::log::Level::Panic, "isr", "access",
+                        (frame->error_code & 2) ? "write" : "read");
+  }
 
-    TORI_PANIC("isr", "unhandled exception");
+  TORI_PANIC("isr", "unhandled exception");
 }
 
 } // namespace
 
 namespace tori::arch::x86_64 {
 
-extern "C" void handle_interrupt(InterruptFrame* frame) {
-    const uint8_t vec = static_cast<uint8_t>(frame->vector);
+extern "C" void handle_interrupt(InterruptFrame *frame) {
+  const uint8_t vec = static_cast<uint8_t>(frame->vector);
 
-    // IRQ 0: PIT timer
-    if (vec == 32) {
-        timer_tick = timer_tick + 1;
+  // IRQ 0: Timer (previously PIT, now LAPIC)
+  if (vec == 32) {
+    timer_tick = timer_tick + 1;
+    lapic::eoi();
+    return;
+  }
 
-        // Log every 100 ticks (~100ms at 1000Hz)
-        if ((timer_tick % 100) == 0) {
-            ::tori::log::write_value(::tori::log::Level::Info, "pit", __FILE__, __LINE__, "tick", timer_tick);
-        }
+  // Spurious IRQ or unknown: ignore
+  if (vec >= 32) {
+    lapic::eoi();
+    return;
+  }
 
-        // Send EOI to master PIC
-        outb(0x20, 0x20);
-        return;
-    }
-
-    // Spurious IRQ or unknown: ignore
-    if (vec >= 32) {
-        // Send EOI for master PIC (vectors 32-39) or both (40-47)
-        outb(0x20, 0x20);
-        if (vec >= 40) {
-            outb(0xA0, 0x20);
-        }
-        return;
-    }
-
-    // CPU exception (vectors 0-31)
-    handle_exception(frame);
+  // CPU exception (vectors 0-31)
+  handle_exception(frame);
 }
 
 void init_idt() {
-    for (int i = 0; i < 256; ++i) {
-        uint64_t addr = reinterpret_cast<uint64_t>(isr_stub_table[i]);
+  for (int i = 0; i < 256; ++i) {
+    uint64_t addr = reinterpret_cast<uint64_t>(isr_stub_table[i]);
 
-        idt[i].offset_low  = addr & 0xFFFF;
-        idt[i].selector    = gdt_selector(GDT_KERNEL_CODE);
-        idt[i].ist         = 0;
-        idt[i].type_attr   = 0x8E;  // present, ring 0, interrupt gate
-        idt[i].offset_mid  = (addr >> 16) & 0xFFFF;
-        idt[i].offset_high = (addr >> 32) & 0xFFFFFFFF;
-        idt[i].zero        = 0;
-    }
+    idt[i].offset_low = addr & 0xFFFF;
+    idt[i].selector = gdt_selector(GDT_KERNEL_CODE);
+    idt[i].ist = 0;
+    idt[i].type_attr = 0x8E; // present, ring 0, interrupt gate
+    idt[i].offset_mid = (addr >> 16) & 0xFFFF;
+    idt[i].offset_high = (addr >> 32) & 0xFFFFFFFF;
+    idt[i].zero = 0;
+  }
 
-    // Set IST1 for double fault (vector 8)
-    idt[8].ist = 1;
+  // Set IST1 for double fault (vector 8)
+  idt[8].ist = 1;
 
-    IDTR idtr = {};
-    idtr.limit = sizeof(idt) - 1;
-    idtr.base = reinterpret_cast<uint64_t>(idt);
+  IDTR idtr = {};
+  idtr.limit = sizeof(idt) - 1;
+  idtr.base = reinterpret_cast<uint64_t>(idt);
 
-    asm volatile("lidt %0" : : "m"(idtr) : "memory");
+  asm volatile("lidt %0" : : "m"(idtr) : "memory");
 
-    TORI_LOG_INFO("idt", "IDT initialized with 256 entries");
+  TORI_LOG_INFO("idt", "IDT initialized with 256 entries");
 }
 
 static void io_delay() { inb(0x80); }
 
 // Disable the local APIC so the legacy PIC delivers interrupts directly.
 // OVMF may enable the APIC, causing the CPU to ignore the PIC's INT line.
-static void disable_local_apic() {
-    uint32_t lo, hi;
-    asm volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(0x1B) : "memory");
-    if (lo & (1u << 11)) {
-        lo &= ~(1u << 11);           // Clear APIC global enable bit
-        asm volatile("wrmsr" : : "a"(lo), "d"(hi), "c"(0x1B) : "memory");
-    }
-}
-
 void init_pic() {
-    disable_local_apic();
+  // Remap PIC so IRQs don't conflict with CPU exceptions (0-31)
+  outb(0x20, 0x11);
+  io_delay(); // ICW1: init
+  outb(0xA0, 0x11);
+  io_delay(); // ICW1: init
 
-    // IMCR: switch from APIC to PIC mode if needed
-    outb(0x22, 0x70);
-    io_delay();
-    uint8_t imcr = inb(0x23);
-    if (imcr & 1) {
-        outb(0x22, 0x70);
-        io_delay();
-        outb(0x23, imcr & ~1u);
-    }
+  outb(0x21, 0x20);
+  io_delay(); // ICW2: master offset = 32
+  outb(0xA1, 0x28);
+  io_delay(); // ICW2: slave offset = 40
 
-    // Remap PIC so IRQs don't conflict with CPU exceptions (0-31)
-    outb(0x20, 0x11);   io_delay();  // ICW1: init
-    outb(0xA0, 0x11);   io_delay();  // ICW1: init
+  outb(0x21, 0x04);
+  io_delay(); // ICW3: slave at IRQ2
+  outb(0xA1, 0x02);
+  io_delay(); // ICW3: cascade ID
 
-    outb(0x21, 0x20);   io_delay();  // ICW2: master offset = 32
-    outb(0xA1, 0x28);   io_delay();  // ICW2: slave offset = 40
+  outb(0x21, 0x01);
+  io_delay(); // ICW4: 8086 mode
+  outb(0xA1, 0x01);
+  io_delay(); // ICW4: 8086 mode
 
-    outb(0x21, 0x04);   io_delay();  // ICW3: slave at IRQ2
-    outb(0xA1, 0x02);   io_delay();  // ICW3: cascade ID
+  // Mask all legacy PIC interrupts
+  outb(0x21, 0xFF);
+  io_delay();
+  outb(0xA1, 0xFF);
+  io_delay();
 
-    outb(0x21, 0x01);   io_delay();  // ICW4: 8086 mode
-    outb(0xA1, 0x01);   io_delay();  // ICW4: 8086 mode
-
-    // Mask all IRQs except timer (IRQ0)
-    outb(0x21, 0xFE);   io_delay();  // Enable IRQ0 only on master
-    outb(0xA1, 0xFF);   io_delay();  // Disable all slave IRQs
-
-    TORI_LOG_INFO("pic", "PIC remapped: master at 0x20, slave at 0x28");
+  TORI_LOG_INFO("pic", "Legacy PIC initialized and fully masked");
 }
 
 void init_pit() {
-    // PIT channel 0, rate generator mode, binary
-    // Divisor for ~1000 Hz: 1193182 / 1000 = 1193
-    constexpr uint16_t divisor = 1193;
+  // PIT channel 0, rate generator mode, binary
+  // Divisor for ~1000 Hz: 1193182 / 1000 = 1193
+  constexpr uint16_t divisor = 1193;
 
-    outb(0x43, 0x36);             // CW: channel 0, lobyte/hibyte, rate gen, binary
-    outb(0x40, divisor & 0xFF);   // Low byte
-    outb(0x40, divisor >> 8);     // High byte
+  outb(0x43, 0x36);           // CW: channel 0, lobyte/hibyte, rate gen, binary
+  outb(0x40, divisor & 0xFF); // Low byte
+  outb(0x40, divisor >> 8);   // High byte
 
-    TORI_LOG_INFO("pit", "PIT initialized at ~1000 Hz");
+  TORI_LOG_INFO("pit", "PIT initialized at ~1000 Hz");
 }
 
-uint64_t timer_tick_count() {
-    return timer_tick;
-}
+uint64_t timer_tick_count() { return timer_tick; }
 
 } // namespace tori::arch::x86_64

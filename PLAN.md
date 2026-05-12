@@ -149,7 +149,7 @@ Acceptance criteria:
 
 ### Milestone 2: Memory Foundation
 
-Status: **in progress**
+Status: **complete**
 
 - [x] Add physical page allocator based on the parsed memory map.
 - [x] Reclaim usable and Limine bootloader-reclaimable pages.
@@ -163,6 +163,7 @@ Status: **in progress**
 - [x] Add boot-time smoke tests for page, contiguous page, and slice allocation.
 - [x] Add early kernel heap for larger variable-sized allocations after the page and slice layers are stable.
 - [x] Add basic virtual memory ownership model (vmem_layout.hpp with kernel image region, HHDM awareness, address space constants).
+- [x] Add minimal Virtual Memory Manager (VMM) with `map_page` support.
 - [ ] Add testable pure logic for memory region conversion and allocation edge cases where practical.
 
 ### Milestone 3: ACPI And Platform Discovery
@@ -192,9 +193,14 @@ Status: **complete**
 
 ### Milestone 5: Extended Platform Discovery
 
-- Parse ACPI enough to discover core platform tables.
-- Prepare for APIC and SMP discovery.
-- Keep platform parsing isolated from generic kernel policy.
+Status: **in progress**
+
+- [x] Parse ACPI enough to discover core platform tables (MADT).
+- [x] Enable Limine SMP request for AP discovery.
+- [x] Implement Local APIC (LAPIC) driver.
+- [x] Transition system tick to per-CPU LAPIC Timer.
+- [ ] Prepare for SMP initialization.
+- [ ] Keep platform parsing isolated from generic kernel policy.
 
 ### Milestone 6: Scheduling And Kernel Services
 
