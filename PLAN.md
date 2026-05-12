@@ -203,9 +203,28 @@ Status: **complete**
  - [x] Keep platform parsing isolated from generic kernel policy.
 ### Milestone 6: Scheduling And Kernel Services
 
-- Add task/thread representation.
+- [x] Add task/thread representation.
+  - [x] Task control block (id, state, name, kernel stack, CPU context)
+  - [x] Task states: Ready, Running, Blocked, Dead
+  - [x] Task creation (allocates kernel stack + initializes context frame)
+  - [x] Per-CPU current task pointer (indexed by LAPIC ID)
+  - [x] Global task linked list with locking
+  - [x] Unique 64-bit task ID allocation
+  - [x] Context switch assembly (save/restore rbx, rbp, r12-r15, RSP)
+  - [x] Task trampoline for first-time execution
+  - [x] BSP boot task registered at init
 - Add scheduler foundation.
-- Add synchronization primitives.
+- [x] Add synchronization primitives.
+  - [x] Spinlock, LockGuard, TimedSpinlock (basic busy-wait locks)
+  - [x] Mutex, TimedMutex (spin-now, block-later interface)
+  - [x] Semaphore, TimedSemaphore (counting semaphore with timeout)
+  - [x] RWLock (shared readers / exclusive writer)
+  - [x] Seqlock (sequence lock for read-mostly data)
+  - [x] ConditionVariable (predicate-spin now, scheduler-block later)
+  - [x] IrqSpinlock, IrqLockGuard (interrupt-safe locking)
+  - [x] UniqueLock (RAII adapter for Lockable/TimedLockable)
+  - [x] Atomic&lt;T&gt; (type-safe atomic wrapper)
+  - [x] Integrate spinlock protection into PMM, slice allocator, heap, VMM
 - Upgrade logging to per-CPU/deferred behavior.
 
 ### Milestone 7: User Boundary

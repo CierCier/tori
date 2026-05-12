@@ -11,6 +11,7 @@
 #include <tori/kernel/memory_map.hpp>
 #include <tori/kernel/pmm.hpp>
 #include <tori/kernel/slice_allocator.hpp>
+#include <tori/kernel/task.hpp>
 #include <tori/kernel/time.hpp>
 #include <tori/kernel/vmem_layout.hpp>
 
@@ -196,6 +197,8 @@ namespace tori {
         tori::arch::x86_64::lapic::init(madt_info.local_apic_address);
         tori::arch::x86_64::lapic::init_timer(1000);
     }
+
+    tori::sched::init_task_system(owned_boot_info.smp.bsp_lapic_id);
 
     // AP Initialization
     if (owned_boot_info.has_smp) {
