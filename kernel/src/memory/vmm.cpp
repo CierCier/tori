@@ -2,6 +2,7 @@
 #include <tori/kernel/pmm.hpp>
 #include <tori/kernel/address.hpp>
 #include <tori/kernel/log.hpp>
+#include <tori/kernel/sync/spinlock.hpp>
 
 namespace {
 
@@ -31,11 +32,14 @@ uint64_t ensure_table(uint64_t& entry) {
     return entry & ~0xFFFULL;
 }
 
+tori::sync::Spinlock vmm_lock;
+
 } // namespace
 
 namespace tori::memory::vmm {
 
 void map_page(uint64_t virtual_address, uint64_t physical_address, Flags flags) {
+    tori::sync::LockGuard guard(vmm_lock);
     uint64_t cr3;
     asm volatile("mov %%cr3, %0" : "=r"(cr3));
     const uint64_t pml4_phys = cr3 & ~0xFFFULL;

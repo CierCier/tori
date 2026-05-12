@@ -75,6 +75,19 @@ struct KernelAddress {
     uint64_t virtual_base;
 };
 
+struct CpuInfo {
+    uint32_t processor_id;
+    uint32_t lapic_id;
+    void* internal_handle;
+};
+
+struct SmpInfo {
+    uint32_t bsp_lapic_id;
+    uint64_t cpu_count;
+    CpuInfo* cpus;
+    void (*wake_up_ap)(const CpuInfo& cpu, void (*entry)(void*), void* arg);
+};
+
 struct BootInfo {
     BootSource source;
     const char* bootloader_name;
@@ -86,9 +99,11 @@ struct BootInfo {
     Framebuffer framebuffer;
     void* rsdp;
     uint64_t module_count;
+    SmpInfo smp;
     bool has_framebuffer;
     bool has_hhdm;
     bool has_rsdp;
+    bool has_smp;
 };
 
 } // namespace tori::boot

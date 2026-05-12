@@ -4,6 +4,7 @@
 #include <tori/kernel/gdt.hpp>
 #include <tori/kernel/lapic.hpp>
 #include <tori/kernel/log.hpp>
+#include <tori/kernel/time.hpp>
 
 #include "io.hpp"
 
@@ -70,8 +71,6 @@ const char *exception_names[32] = {
     "reserved-31",
 };
 
-volatile uint64_t timer_tick = 0;
-
 const char *exception_name(uint8_t vec) {
   if (vec < 32) {
     return exception_names[vec];
@@ -136,7 +135,7 @@ extern "C" void handle_interrupt(InterruptFrame *frame) {
 
   // IRQ 0: Timer (previously PIT, now LAPIC)
   if (vec == 32) {
-    timer_tick = timer_tick + 1;
+    tori::time::tick(lapic::id());
     lapic::eoi();
     return;
   }
@@ -223,6 +222,6 @@ void init_pit() {
   TORI_LOG_INFO("pit", "PIT initialized at ~1000 Hz");
 }
 
-uint64_t timer_tick_count() { return timer_tick; }
+uint64_t timer_tick_count() { return tori::time::uptime_ms(); }
 
 } // namespace tori::arch::x86_64

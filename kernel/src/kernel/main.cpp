@@ -11,6 +11,7 @@
 #include <tori/kernel/memory_map.hpp>
 #include <tori/kernel/pmm.hpp>
 #include <tori/kernel/slice_allocator.hpp>
+#include <tori/kernel/time.hpp>
 #include <tori/kernel/vmem_layout.hpp>
 
 #include "../arch/x86_64/halt.hpp"
@@ -115,6 +116,30 @@ tori::boot::MemoryMap copy_memory_map(const tori::boot::MemoryMap& source) {
     };
 }
 
+struct ApData {
+    size_t cpu_index;
+    uint64_t lapic_base;
+};
+
+void ap_main(void* arg) {
+    auto* data = static_cast<ApData*>(arg);
+    size_t cpu_index = data->cpu_index;
+    uint64_t lapic_base = data->lapic_base;
+
+    tori::arch::x86_64::init_gdt();
+    tori::arch::x86_64::load_tss(cpu_index);
+    tori::arch::x86_64::init_idt();
+    tori::arch::x86_64::lapic::init(lapic_base);
+    tori::arch::x86_64::lapic::init_timer(1000);
+
+    TORI_LOG_INFO("kernel", "AP initialized and entering idle loop");
+    TORI_LOG_VALUE(tori::log::Level::Info, "kernel", "ap cpu index", cpu_index);
+
+    for (;;) {
+        asm volatile("sti; hlt" : : : "memory");
+    }
+}
+
 } // namespace
 
 namespace tori {
@@ -141,15 +166,54 @@ namespace tori {
     owned_boot_info.memory_map = copy_memory_map(owned_boot_info.memory_map);
     log_vmem_layout();
     init_acpi(owned_boot_info);
-    arch::x86_64::init_gdt();
-    arch::x86_64::init_idt();
-    arch::x86_64::init_pic();
 
     const tori::acpi::SDTHeader* madt_header = tori::acpi::find_table(static_cast<const tori::acpi::RSDP*>(owned_boot_info.rsdp), "APIC");
+    tori::acpi::madt::Info madt_info = {};
     if (madt_header != nullptr) {
-        const tori::acpi::madt::Info madt_info = tori::acpi::madt::parse(madt_header);
-        arch::x86_64::lapic::init(madt_info.local_apic_address);
-        arch::x86_64::lapic::init_timer(1000);
+        madt_info = tori::acpi::madt::parse(madt_header);
+    }
+
+    // BSP Initialization
+    tori::arch::x86_64::init_gdt();
+    // We need to find the BSP's index in the CPU list.
+    // For now, let's assume the BSP is the first CPU in the list that matches bsp_lapic_id.
+    size_t bsp_index = 0;
+    if (owned_boot_info.has_smp) {
+        for (size_t i = 0; i < owned_boot_info.smp.cpu_count; ++i) {
+            if (owned_boot_info.smp.cpus[i].lapic_id == owned_boot_info.smp.bsp_lapic_id) {
+                bsp_index = i;
+                break;
+            }
+        }
+    }
+    tori::time::init(owned_boot_info.smp.bsp_lapic_id, 1000);
+
+    tori::arch::x86_64::load_tss(bsp_index);
+    tori::arch::x86_64::init_idt();
+    tori::arch::x86_64::init_pic();
+
+    if (madt_header != nullptr) {
+        tori::arch::x86_64::lapic::init(madt_info.local_apic_address);
+        tori::arch::x86_64::lapic::init_timer(1000);
+    }
+
+    // AP Initialization
+    if (owned_boot_info.has_smp) {
+        // We need a place for ApData that persists.
+        static ApData ap_data[CONFIG_MAX_CPUS];
+
+        for (size_t i = 0; i < owned_boot_info.smp.cpu_count; ++i) {
+            if (i == bsp_index) continue;
+
+            ap_data[i].cpu_index = i;
+            ap_data[i].lapic_base = madt_info.local_apic_address;
+
+            TORI_LOG_INFO("kernel", "waking up AP");
+            TORI_LOG_VALUE(tori::log::Level::Info, "kernel", "ap cpu index", i);
+            TORI_LOG_VALUE(tori::log::Level::Info, "kernel", "ap lapic id", owned_boot_info.smp.cpus[i].lapic_id);
+
+            owned_boot_info.smp.wake_up_ap(owned_boot_info.smp.cpus[i], ap_main, &ap_data[i]);
+        }
     }
 
     TORI_LOG_INFO("kernel", "boot, memory, ACPI, and CPU runtime initialized; interrupts enabled");

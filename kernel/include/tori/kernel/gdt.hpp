@@ -37,4 +37,8 @@ inline constexpr size_t gdt_total_entries = 5 + 2 * CONFIG_MAX_CPUS;
 
 void init_gdt();
 
+// Loads the TSS for the specified CPU index into the TR register.
+// Must be called after init_gdt().
+void load_tss(size_t cpu_index);
+
 } // namespace tori::arch::x86_64

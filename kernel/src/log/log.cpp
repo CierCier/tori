@@ -1,9 +1,12 @@
 #include <tori/kernel/log.hpp>
 
+#include <tori/kernel/sync/spinlock.hpp>
 #include "framebuffer_console.hpp"
 #include "../arch/x86_64/serial.hpp"
 
 namespace {
+
+tori::sync::Spinlock log_lock;
 
 constexpr unsigned color_trace = 0x00888888;
 constexpr unsigned color_debug = 0x00aaaaaa;
@@ -111,6 +114,7 @@ void init_framebuffer(const boot::Framebuffer& framebuffer) {
 }
 
 void write(Level level, const char* category, const char*, int, const char* message) {
+    tori::sync::LockGuard guard(log_lock);
     const unsigned color = level_color(level);
     write_prefix(level, category, color);
     write_sink(message != nullptr ? message : "(null)", color);
@@ -118,6 +122,7 @@ void write(Level level, const char* category, const char*, int, const char* mess
 }
 
 void write_value(Level level, const char* category, const char*, int, const char* label, uint64_t value) {
+    tori::sync::LockGuard guard(log_lock);
     const unsigned color = level_color(level);
     write_prefix(level, category, color);
     write_sink(label != nullptr ? label : "value", color);
@@ -129,6 +134,7 @@ void write_value(Level level, const char* category, const char*, int, const char
 }
 
 void write_text_value(Level level, const char* category, const char*, int, const char* label, const char* value) {
+    tori::sync::LockGuard guard(log_lock);
     const unsigned color = level_color(level);
     write_prefix(level, category, color);
     write_sink(label != nullptr ? label : "value", color);

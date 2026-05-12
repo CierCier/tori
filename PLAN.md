@@ -193,15 +193,14 @@ Status: **complete**
 
 ### Milestone 5: Extended Platform Discovery
 
-Status: **in progress**
+ Status: **complete**
 
-- [x] Parse ACPI enough to discover core platform tables (MADT).
-- [x] Enable Limine SMP request for AP discovery.
-- [x] Implement Local APIC (LAPIC) driver.
-- [x] Transition system tick to per-CPU LAPIC Timer.
-- [ ] Prepare for SMP initialization.
-- [ ] Keep platform parsing isolated from generic kernel policy.
-
+ - [x] Parse ACPI enough to discover core platform tables (MADT).
+ - [x] Enable Limine SMP request for AP discovery.
+ - [x] Implement Local APIC (LAPIC) driver.
+ - [x] Transition system tick to per-CPU LAPIC Timer.
+ - [x] Initialize Symmetric Multiprocessing (SMP) and boot all APs.
+ - [x] Keep platform parsing isolated from generic kernel policy.
 ### Milestone 6: Scheduling And Kernel Services
 
 - Add task/thread representation.

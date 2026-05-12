@@ -1,5 +1,6 @@
 #include <tori/kernel/boot_info.hpp>
 #include <tori/kernel/kernel.hpp>
+#include <config.h>
 
 #include <limine.h>
 
@@ -77,8 +78,35 @@ volatile limine_mp_request mp_request = {
     .flags = 0,
 };
 
-__attribute__((used, section(".limine_requests_end")))
-volatile uint64_t limine_requests_end_marker[2] = LIMINE_REQUESTS_END_MARKER;
+struct ApStartData {
+    void (*entry)(void*);
+    void* arg;
+};
+
+// Static storage for CpuInfo array passed to generic kernel
+tori::boot::CpuInfo generic_cpus[CONFIG_MAX_CPUS];
+
+extern "C" void limine_ap_trampoline(struct limine_mp_info* info) {
+    auto* data = reinterpret_cast<ApStartData*>(info->extra_argument);
+    data->entry(data->arg);
+}
+
+void limine_wake_up_ap(const tori::boot::CpuInfo& cpu, void (*entry)(void*), void* arg) {
+    auto* info = static_cast<struct limine_mp_info*>(cpu.internal_handle);
+    
+    // We need a place to store ApStartData that persists until the AP wakes up.
+    // Since we are waking up APs one by one in a synchronous loop in kernel_main,
+    // we can arguably use a single static struct, but per-CPU is safer.
+    static ApStartData start_data[CONFIG_MAX_CPUS];
+    uint32_t id = cpu.processor_id;
+    if (id >= CONFIG_MAX_CPUS) return;
+
+    start_data[id].entry = entry;
+    start_data[id].arg = arg;
+
+    info->extra_argument = reinterpret_cast<uint64_t>(&start_data[id]);
+    info->goto_address = limine_ap_trampoline;
+}
 
 tori::boot::MemoryKind convert_memory_kind(uint64_t type) {
     switch (type) {
@@ -179,9 +207,40 @@ tori::boot::Framebuffer collect_framebuffer(bool& has_framebuffer) {
     };
 }
 
+tori::boot::SmpInfo collect_smp_info(bool& has_smp) {
+    has_smp = false;
+    auto* response = mp_request.response;
+    if (response == nullptr) {
+        return {};
+    }
+
+    has_smp = true;
+    uint64_t count = response->cpu_count;
+    if (count > CONFIG_MAX_CPUS) {
+        count = CONFIG_MAX_CPUS;
+    }
+
+    for (uint64_t i = 0; i < count; ++i) {
+        auto* info = response->cpus[i];
+        generic_cpus[i].processor_id = info->processor_id;
+        generic_cpus[i].lapic_id = info->lapic_id;
+        generic_cpus[i].internal_handle = info;
+    }
+
+    return {
+        .bsp_lapic_id = response->bsp_lapic_id,
+        .cpu_count = count,
+        .cpus = generic_cpus,
+        .wake_up_ap = limine_wake_up_ap,
+    };
+}
+
 tori::boot::BootInfo collect_boot_info() {
     bool has_framebuffer = false;
     const tori::boot::Framebuffer framebuffer = collect_framebuffer(has_framebuffer);
+
+    bool has_smp = false;
+    const tori::boot::SmpInfo smp = collect_smp_info(has_smp);
 
     auto* bootloader_response = bootloader_info_request.response;
     auto* cmdline_response = cmdline_request.response;
@@ -204,9 +263,11 @@ tori::boot::BootInfo collect_boot_info() {
         .framebuffer = framebuffer,
         .rsdp = rsdp_response != nullptr ? rsdp_response->address : nullptr,
         .module_count = module_response != nullptr ? module_response->module_count : 0,
+        .smp = smp,
         .has_framebuffer = has_framebuffer,
         .has_hhdm = hhdm_response != nullptr,
         .has_rsdp = rsdp_response != nullptr && rsdp_response->address != nullptr,
+        .has_smp = has_smp,
     };
 }
 

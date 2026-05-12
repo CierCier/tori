@@ -3,6 +3,7 @@
 #include <tori/kernel/address.hpp>
 #include <tori/kernel/log.hpp>
 #include <tori/kernel/pmm.hpp>
+#include <tori/kernel/sync/spinlock.hpp>
 
 namespace {
 
@@ -31,6 +32,8 @@ SizeClass classes[] = {
 };
 
 tori::memory::slice::Stats allocator_stats = {};
+
+tori::sync::Spinlock slice_lock;
 
 bool is_power_of_two(size_t value) {
     return value != 0 && (value & (value - 1)) == 0;
@@ -98,6 +101,7 @@ void init(uint64_t hhdm_offset) {
 }
 
 void* alloc(size_t size, size_t alignment) {
+    tori::sync::LockGuard guard(slice_lock);
     SizeClass* size_class = class_for(size, alignment);
     if (size_class == nullptr) {
         ++allocator_stats.failed_allocations;
@@ -120,6 +124,8 @@ void free(void* pointer, size_t size) {
         return;
     }
 
+    tori::sync::LockGuard guard(slice_lock);
+
     SizeClass* size_class = class_for(size, alignof(uint64_t));
     if (size_class == nullptr) {
         return;
@@ -133,6 +139,7 @@ void free(void* pointer, size_t size) {
 }
 
 Stats stats() {
+    tori::sync::LockGuard guard(slice_lock);
     return allocator_stats;
 }
 

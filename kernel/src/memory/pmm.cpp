@@ -2,6 +2,7 @@
 
 #include <tori/kernel/log.hpp>
 #include <tori/kernel/memory_map.hpp>
+#include <tori/kernel/sync/spinlock.hpp>
 
 extern "C" char __kernel_virtual_start[];
 extern "C" char __kernel_virtual_end[];
@@ -14,6 +15,8 @@ uint64_t page_bitmap[bitmap_words] = {};
 
 tori::memory::pmm::Stats allocator_stats = {};
 uint64_t next_search_page = 0;
+
+tori::sync::Spinlock pmm_lock;
 
 uint64_t align_up(uint64_t value, uint64_t alignment) {
     return (value + alignment - 1) & ~(alignment - 1);
@@ -180,6 +183,8 @@ uint64_t alloc_pages(uint64_t page_count) {
         return invalid_physical_address;
     }
 
+    tori::sync::LockGuard guard(pmm_lock);
+
     for (uint64_t offset = 0; offset < max_managed_pages; ++offset) {
         const uint64_t page = (next_search_page + offset) % max_managed_pages;
         if (page_range_free(page, page_count)) {
@@ -207,6 +212,8 @@ void free_pages(uint64_t physical_address, uint64_t page_count) {
     if (page_count == 0) {
         return;
     }
+
+    tori::sync::LockGuard guard(pmm_lock);
 
     const uint64_t page = physical_address / page_size;
     if (!page_index_valid(page) || page + page_count < page) {
@@ -236,6 +243,7 @@ bool owns_page(uint64_t physical_address) {
 }
 
 Stats stats() {
+    tori::sync::LockGuard guard(pmm_lock);
     return allocator_stats;
 }
 

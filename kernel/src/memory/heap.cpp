@@ -3,6 +3,7 @@
 #include <tori/kernel/address.hpp>
 #include <tori/kernel/log.hpp>
 #include <tori/kernel/pmm.hpp>
+#include <tori/kernel/sync/spinlock.hpp>
 #include <tori/kernel/vmem_layout.hpp>
 
 namespace {
@@ -38,6 +39,8 @@ struct FreeNode {
 FreeNode* free_list = nullptr;
 uint64_t heap_backing_pages = 0;
 uint64_t heap_failed_allocations = 0;
+
+tori::sync::Spinlock heap_lock;
 
 BlockHeader* block_header(const void* ptr) {
     auto* hdr = static_cast<const BlockHeader*>(ptr);
@@ -180,61 +183,53 @@ void* alloc(size_t size, size_t alignment) {
         alignment = alignof(uint64_t);
     }
 
-    FreeNode** prev_link = &free_list;
-    FreeNode* node = free_list;
+    tori::sync::LockGuard guard(heap_lock);
 
-    while (node != nullptr) {
-        auto* hdr = block_header(node);
-        const uint64_t bsize = block_size(hdr);
-        auto* block_start = reinterpret_cast<uint8_t*>(hdr);
+    while (true) {
+        FreeNode** prev_link = &free_list;
+        FreeNode* node = free_list;
 
-        // Compute where the user pointer will go (with alignment)
-        // Layout: [BlockHeader][shift][padding?][user data][Footer]
-        //          ^--hdr      ^--payload       ^--user_ptr
-        //
-        // user_ptr = align_up(payload + sizeof(shift), alignment)
-        // total_used = (user_ptr - block_start) + size + sizeof(Footer)
-        uintptr_t payload_addr = reinterpret_cast<uintptr_t>(block_payload(hdr));
-        uintptr_t user_ptr = align_up(payload_addr + sizeof(uint64_t), alignment);
-        uint64_t total_used = static_cast<uint64_t>((user_ptr - reinterpret_cast<uintptr_t>(block_start)) + size + sizeof(Footer));
+        while (node != nullptr) {
+            auto* hdr = block_header(node);
+            const uint64_t bsize = block_size(hdr);
+            auto* block_start = reinterpret_cast<uint8_t*>(hdr);
 
-        if (total_used < min_block_size) {
-            total_used = min_block_size;
-        }
+            uintptr_t payload_addr = reinterpret_cast<uintptr_t>(block_payload(hdr));
+            uintptr_t user_ptr = align_up(payload_addr + sizeof(uint64_t), alignment);
+            uint64_t total_used = static_cast<uint64_t>((user_ptr - reinterpret_cast<uintptr_t>(block_start)) + size + sizeof(Footer));
 
-        if (total_used <= bsize) {
-            remove_from_free_list(node);
-
-            uint64_t remaining = bsize - total_used;
-            if (remaining >= min_block_size) {
-                // Split: allocate from the start, leave remainder as free
-                set_block(hdr, total_used, true);
-
-                auto* remainder_hdr = reinterpret_cast<BlockHeader*>(block_start + total_used);
-                set_block(remainder_hdr, remaining, false);
-                add_to_free_list(static_cast<FreeNode*>(block_payload(remainder_hdr)));
-            } else {
-                // Use the whole block
-                set_block(hdr, bsize, true);
+            if (total_used < min_block_size) {
+                total_used = min_block_size;
             }
 
-            // Store the shift: distance from payload to user pointer
-            uint64_t shift = static_cast<uint64_t>(user_ptr - payload_addr);
-            write_shift(reinterpret_cast<void*>(user_ptr), shift);
-            return reinterpret_cast<void*>(user_ptr);
+            if (total_used <= bsize) {
+                remove_from_free_list(node);
+
+                uint64_t remaining = bsize - total_used;
+                if (remaining >= min_block_size) {
+                    set_block(hdr, total_used, true);
+
+                    auto* remainder_hdr = reinterpret_cast<BlockHeader*>(block_start + total_used);
+                    set_block(remainder_hdr, remaining, false);
+                    add_to_free_list(static_cast<FreeNode*>(block_payload(remainder_hdr)));
+                } else {
+                    set_block(hdr, bsize, true);
+                }
+
+                uint64_t shift = static_cast<uint64_t>(user_ptr - payload_addr);
+                write_shift(reinterpret_cast<void*>(user_ptr), shift);
+                return reinterpret_cast<void*>(user_ptr);
+            }
+
+            prev_link = &node->next;
+            node = node->next;
         }
 
-        prev_link = &node->next;
-        node = node->next;
+        if (!grow_heap()) {
+            ++heap_failed_allocations;
+            return nullptr;
+        }
     }
-
-    // No suitable block found - grow the heap and retry
-    if (!grow_heap()) {
-        ++heap_failed_allocations;
-        return nullptr;
-    }
-
-    return alloc(size, alignment);
 }
 
 void free(void* pointer) {
@@ -245,6 +240,8 @@ void free(void* pointer) {
     if (!contains(pointer)) {
         return;
     }
+
+    tori::sync::LockGuard guard(heap_lock);
 
     auto* hdr = header_from_user_ptr(pointer);
     if (!block_allocated(hdr)) {
@@ -304,6 +301,9 @@ bool contains(const void* pointer) {
     if (pointer == nullptr) {
         return false;
     }
+
+    tori::sync::LockGuard guard(heap_lock);
+
     auto* ptr = static_cast<const uint8_t*>(pointer);
     for (size_t i = 0; i < region_count; ++i) {
         if (ptr >= regions[i].base && ptr < regions[i].limit) {
@@ -314,6 +314,7 @@ bool contains(const void* pointer) {
 }
 
 Stats stats() {
+    tori::sync::LockGuard guard(heap_lock);
     Stats s = {};
     s.backing_pages = heap_backing_pages;
     s.failed_allocations = heap_failed_allocations;
