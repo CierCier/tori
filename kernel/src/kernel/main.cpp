@@ -145,6 +145,8 @@ void ap_main(void* arg) {
 
 namespace tori {
 
+void kernel_main_task(void*);
+
 [[noreturn]] void kernel_main(const boot::BootInfo& boot_info) {
     boot::BootInfo owned_boot_info = boot_info;
 
@@ -220,9 +222,27 @@ namespace tori {
     }
 
     TORI_LOG_INFO("kernel", "boot, memory, ACPI, and CPU runtime initialized; interrupts enabled");
+    TORI_LOG_INFO("kernel", "starting scheduler");
 
-    // sti; hlt in one asm block: STI defers interrupt recognition by one
-    // instruction, so pairing them ensures the very next interrupt wakes us.
+    tori::sched::Task* main_task = tori::sched::create_task(kernel_main_task, nullptr, "kernel-main");
+    if (main_task == nullptr) {
+        TORI_PANIC("kernel", "failed to create kernel main task");
+    }
+
+    TORI_LOG_VALUE(tori::log::Level::Info, "kernel", "main task id", main_task->id);
+    tori::sched::start_scheduler();
+}
+
+void kernel_main_task(void*) {
+    TORI_LOG_INFO("kernel", "first scheduled task running");
+    TORI_LOG_VALUE(tori::log::Level::Info, "kernel", "current task id", tori::sched::current_task()->id);
+    TORI_LOG_TEXT_VALUE(tori::log::Level::Info, "kernel", "current task name", tori::sched::current_task()->name);
+
+    TORI_LOG_INFO("kernel", "yielding to idle task");
+    tori::sched::yield();
+
+    TORI_LOG_INFO("kernel", "back in kernel-main task after yield");
+
     for (;;) {
         asm volatile("sti; hlt" : : : "memory");
     }

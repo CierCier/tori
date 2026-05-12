@@ -17,6 +17,15 @@ tori::sched::Task* all_tasks_tail = nullptr;
 uint64_t next_task_id = 1;
 uint64_t total_task_count = 0;
 
+tori::sched::Task* idle_task = nullptr;
+
+struct ReadyQueue {
+    tori::sched::Task* head;
+    tori::sched::Task* tail;
+};
+
+ReadyQueue global_ready_queue = {};
+
 constexpr uint64_t stack_pages = 4;
 constexpr uint64_t stack_size = stack_pages * 4096;
 
@@ -43,15 +52,6 @@ void list_add(tori::sched::Task* task) {
     all_tasks_tail = task;
 }
 
-void list_remove(tori::sched::Task* task) {
-    if (task->prev) task->prev->next = task->next;
-    if (task->next) task->next->prev = task->prev;
-    if (all_tasks_head == task) all_tasks_head = task->next;
-    if (all_tasks_tail == task) all_tasks_tail = task->prev;
-    task->next = nullptr;
-    task->prev = nullptr;
-}
-
 void setup_task_stack(tori::sched::Task* task, void* trampoline_addr) {
     auto* sp = reinterpret_cast<uint64_t*>(task->stack.top);
 
@@ -67,9 +67,85 @@ void setup_task_stack(tori::sched::Task* task, void* trampoline_addr) {
 }
 
 tori::sched::Task* allocate_task() {
-    auto* task = static_cast<tori::sched::Task*>(
+    return static_cast<tori::sched::Task*>(
         tori::memory::kalloc(sizeof(tori::sched::Task), alignof(tori::sched::Task)));
+}
+
+void ready_queue_init(ReadyQueue* rq) {
+    rq->head = nullptr;
+    rq->tail = nullptr;
+}
+
+void ready_queue_push(ReadyQueue* rq, tori::sched::Task* task) {
+    task->ready_next = nullptr;
+    task->ready_prev = rq->tail;
+    if (rq->tail) {
+        rq->tail->ready_next = task;
+    } else {
+        rq->head = task;
+    }
+    rq->tail = task;
+}
+
+tori::sched::Task* ready_queue_pop(ReadyQueue* rq) {
+    tori::sched::Task* task = rq->head;
+    if (!task) return nullptr;
+
+    rq->head = task->ready_next;
+    if (rq->head) {
+        rq->head->ready_prev = nullptr;
+    } else {
+        rq->tail = nullptr;
+    }
+
+    task->ready_next = nullptr;
+    task->ready_prev = nullptr;
     return task;
+}
+
+void ready_queue_remove(ReadyQueue* rq, tori::sched::Task* task) {
+    if (task->ready_prev) {
+        task->ready_prev->ready_next = task->ready_next;
+    } else {
+        rq->head = task->ready_next;
+    }
+
+    if (task->ready_next) {
+        task->ready_next->ready_prev = task->ready_prev;
+    } else {
+        rq->tail = task->ready_prev;
+    }
+
+    task->ready_next = nullptr;
+    task->ready_prev = nullptr;
+}
+
+void idle_entry(void*) {
+    for (;;) {
+        asm volatile("sti; hlt" : : : "memory");
+    }
+}
+
+void schedule_internal() {
+    tori::sched::Task* current = tori::sched::current_task();
+    tori::sched::Task* next = ready_queue_pop(&global_ready_queue);
+
+    if (!next) {
+        if (current && current->state == tori::sched::TaskState::Running) {
+            return;
+        }
+        next = idle_task;
+        if (!next) return;
+    }
+
+    if (next == current) {
+        if (current) current->state = tori::sched::TaskState::Running;
+        return;
+    }
+
+    next->state = tori::sched::TaskState::Running;
+    tori::sched::set_current_task(next);
+    tori::sched::context_switch(&current->context, next->context);
 }
 
 } // namespace
@@ -85,7 +161,7 @@ extern "C" void tori_sched_task_entry() {
     }
 
     task->state = tori::sched::TaskState::Dead;
-    TORI_LOG_INFO("sched", "task returned (no scheduler yet; halting)");
+    schedule_internal();
 
     for (;;) {
         asm volatile("cli; hlt");
@@ -105,6 +181,8 @@ void init_task_system(uint32_t bsp_lapic_id) {
     for (size_t i = 0; i < CONFIG_MAX_CPUS; ++i) {
         current_tasks[i] = nullptr;
     }
+
+    ready_queue_init(&global_ready_queue);
 
     auto* bsp = allocate_task();
     if (bsp == nullptr) {
@@ -127,9 +205,12 @@ void init_task_system(uint32_t bsp_lapic_id) {
     list_add(bsp);
     ++total_task_count;
 
+    idle_task = create_task(idle_entry, nullptr, "cpu0-idle");
+
     TORI_LOG_INFO("sched", "task system initialized");
     TORI_LOG_VALUE(log::Level::Info, "sched", "bsp lapic id", bsp_lapic_id);
     TORI_LOG_VALUE(log::Level::Info, "sched", "bsp task id", bsp->id);
+    TORI_LOG_VALUE(log::Level::Info, "sched", "idle task id", idle_task ? idle_task->id : 0);
 }
 
 Task* create_task(void (*entry)(void*), void* arg, const char* name) {
@@ -192,6 +273,56 @@ void set_current_task(Task* task) {
 uint64_t task_count() {
     tori::sync::LockGuard guard(task_lock);
     return total_task_count;
+}
+
+void yield() {
+    Task* current = current_task();
+    if (current) {
+        ready_queue_push(&global_ready_queue, current);
+    }
+    schedule_internal();
+}
+
+void block() {
+    Task* current = current_task();
+    if (current) {
+        current->state = TaskState::Blocked;
+    }
+    schedule_internal();
+}
+
+void wake(Task* task) {
+    if (task->state == TaskState::Blocked) {
+        task->state = TaskState::Ready;
+        ready_queue_push(&global_ready_queue, task);
+    }
+}
+
+[[noreturn]] void start_scheduler() {
+    Task* next = ready_queue_pop(&global_ready_queue);
+    if (!next) {
+        TORI_PANIC("sched", "no tasks available to start scheduler");
+    }
+
+    next->state = TaskState::Running;
+    set_current_task(next);
+
+    void* ctx = next->context;
+    asm volatile(
+        "movq %0, %%rsp\n\t"
+        "popq %%rbx\n\t"
+        "popq %%rbp\n\t"
+        "popq %%r12\n\t"
+        "popq %%r13\n\t"
+        "popq %%r14\n\t"
+        "popq %%r15\n\t"
+        "ret\n\t"
+        :
+        : "r"(ctx)
+        : "memory"
+    );
+
+    __builtin_unreachable();
 }
 
 } // namespace tori::sched

@@ -60,7 +60,11 @@ void set_current_task(Task* task);
 
 uint64_t task_count();
 
-void task_yield();
+void yield();
+void block();
+void wake(Task* task);
+
+[[noreturn]] void start_scheduler();
 
 extern "C" void context_switch(CpuContext** prev, CpuContext* next);
 extern "C" void task_trampoline();

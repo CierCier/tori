@@ -213,7 +213,15 @@ Status: **complete**
   - [x] Context switch assembly (save/restore rbx, rbp, r12-r15, RSP)
   - [x] Task trampoline for first-time execution
   - [x] BSP boot task registered at init
-- Add scheduler foundation.
+- [x] Add scheduler helpers (building toward round-robin).
+  - [x] Ready queue with push/pop/remove operations
+  - [x] schedule() core dispatch (pick next ready task, context switch)
+  - [x] yield() (voluntary reschedule)
+  - [x] block() / wake() (sleep and resume tasks)
+  - [x] Idle task per CPU (halts when nothing else to run)
+  - [x] start_scheduler() one-way boot switch from BSP to first task
+  - [x] Round-robin ready queue discipline (pop head, push tail)
+- Add preemptive round-robin scheduler with timer ticks.
 - [x] Add synchronization primitives.
   - [x] Spinlock, LockGuard, TimedSpinlock (basic busy-wait locks)
   - [x] Mutex, TimedMutex (spin-now, block-later interface)
