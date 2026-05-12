@@ -167,7 +167,7 @@ Status: **in progress**
 
 ### Milestone 3: ACPI And Platform Discovery
 
-Status: **in progress**
+Status: **complete**
 
 - [x] Validate RSDP checksum and extended checksum.
 - [x] Parse XSDT with RSDT fallback.
@@ -179,12 +179,16 @@ Status: **in progress**
 
 ### Milestone 4: CPU Runtime
 
-Status: **planned**
+Status: **complete**
 
-- Add GDT/IDT setup.
-- Add exception handlers with panic diagnostics.
-- Add timer support.
-- Add interrupt-safe logging behavior.
+- [x] Add GDT/IDT setup.
+- [x] Add exception handlers with panic diagnostics.
+- [x] Add timer support (PIT at ~1000 Hz via legacy PIC).
+- [x] Add interrupt-safe logging behavior.
+- [x] Move to automatic source discovery via kernel Makefile.
+- [x] Generate 256 ISR stubs at build time.
+- [x] Disable Local APIC (enabled by OVMF) for legacy PIC operation.
+- [x] Clean idle loop with `sti; hlt` and timer interrupts active.
 
 ### Milestone 5: Extended Platform Discovery
 
@@ -229,3 +233,4 @@ Later milestones should add unit-testable pure logic for memory map conversion, 
 - Kernel is higher-half from the first bootable milestone.
 - C++ is freestanding and restricted: no exceptions, RTTI, hosted standard library, or early heap assumptions.
 - VGA text mode is not a primary output path.
+- Build-time constants are centralized in `kernel/config.h` as `CONFIG_*` defines with documentation comments.

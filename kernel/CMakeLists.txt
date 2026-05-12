@@ -3,67 +3,22 @@
 # This workspace builds the freestanding Tori kernel. It must not depend on
 # the userspace libc workspace.
 
-add_library(tori_kernel_config INTERFACE)
+# Kernel is built via its own Makefile which discovers sources via wildcards.
+# This avoids CMake re-configuration when adding/removing source files.
+set(KERNEL_MAKE_OUTPUT_DIR ${CMAKE_BINARY_DIR}/kernel-build)
+set(KERNEL_MAKE_ELF ${KERNEL_MAKE_OUTPUT_DIR}/boot/kernel.elf)
 
-target_compile_features(tori_kernel_config INTERFACE cxx_std_20)
-
-target_compile_options(tori_kernel_config INTERFACE
-    --target=x86_64-unknown-none
-    $<$<COMPILE_LANGUAGE:C,CXX>:-ffreestanding>
-    $<$<COMPILE_LANGUAGE:C,CXX>:-fno-builtin>
-    $<$<COMPILE_LANGUAGE:C,CXX>:-fno-PIC>
-    $<$<COMPILE_LANGUAGE:C,CXX>:-fno-stack-protector>
-    $<$<COMPILE_LANGUAGE:C,CXX>:-mno-red-zone>
-    $<$<COMPILE_LANGUAGE:C,CXX>:-mno-80387>
-    $<$<COMPILE_LANGUAGE:C,CXX>:-mno-mmx>
-    $<$<COMPILE_LANGUAGE:C,CXX>:-mno-sse>
-    $<$<COMPILE_LANGUAGE:C,CXX>:-mno-sse2>
-    $<$<COMPILE_LANGUAGE:C,CXX>:-mcmodel=kernel>
-    $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>
-    $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>
-)
-
-target_include_directories(tori_kernel_config INTERFACE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${PROJECT_SOURCE_DIR}/shared/include
-)
-
-add_executable(tori_kernel
-    src/arch/x86_64/halt.cpp
-    src/arch/x86_64/serial.cpp
-    src/boot/limine/entry.cpp
-    src/kernel/main.cpp
-    src/log/framebuffer_console.cpp
-    src/log/log.cpp
-    src/memory/address.cpp
-    src/memory/allocator.cpp
-    src/memory/heap.cpp
-    src/memory/memory_map.cpp
-    src/memory/pmm.cpp
-    src/memory/slice_allocator.cpp
-    src/platform/uefi_pc/acpi.cpp
-    src/runtime/memory.cpp
-)
-
-target_link_libraries(tori_kernel PRIVATE tori_kernel_config)
-
-target_include_directories(tori_kernel PRIVATE
-    ${PROJECT_SOURCE_DIR}/third_party/limine-protocol/include
-)
-
-target_link_options(tori_kernel PRIVATE
-    --target=x86_64-unknown-none
-    -fuse-ld=lld
-    -nostdlib
-    -static
-    -Wl,-z,max-page-size=0x1000
-    -Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/targets/x86_64-limine/linker.ld
-)
-
-set_target_properties(tori_kernel PROPERTIES
-    OUTPUT_NAME kernel
-    SUFFIX .elf
-    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/boot
+add_custom_target(tori_kernel ALL
+    COMMAND make -f Makefile
+        KERNEL_OUTPUT_DIR=${KERNEL_MAKE_OUTPUT_DIR}
+        CC=${CMAKE_C_COMPILER}
+        CXX=${CMAKE_CXX_COMPILER}
+        AS=${CMAKE_C_COMPILER}
+        LD=${CMAKE_CXX_COMPILER}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    BYPRODUCTS ${KERNEL_MAKE_ELF}
+    COMMENT "Building kernel via kernel/Makefile"
+    USES_TERMINAL
 )
 
 set(TORI_ISO_ROOT ${CMAKE_BINARY_DIR}/iso-root)
@@ -95,7 +50,7 @@ add_custom_target(tori_iso_root
     COMMAND ${CMAKE_COMMAND} -E make_directory ${TORI_ISO_ROOT}
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${PROJECT_SOURCE_DIR}/iso ${TORI_ISO_ROOT}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${TORI_ISO_ROOT}/boot
-    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:tori_kernel> ${TORI_ISO_ROOT}/boot/kernel.elf
+    COMMAND ${CMAKE_COMMAND} -E copy ${KERNEL_MAKE_ELF} ${TORI_ISO_ROOT}/boot/kernel.elf
     COMMAND ${CMAKE_COMMAND} -E make_directory ${TORI_ISO_ROOT}/EFI/BOOT
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${TORI_LIMINE_INSTALL_DIR}/share/limine/BOOTX64.EFI ${TORI_ISO_ROOT}/EFI/BOOT/BOOTX64.EFI
     COMMAND ${CMAKE_COMMAND} -E make_directory ${TORI_ISO_ROOT}/boot/limine

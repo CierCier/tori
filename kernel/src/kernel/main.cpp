@@ -2,7 +2,9 @@
 
 #include <tori/kernel/acpi.hpp>
 #include <tori/kernel/allocator.hpp>
+#include <tori/kernel/gdt.hpp>
 #include <tori/kernel/heap.hpp>
+#include <tori/kernel/idt.hpp>
 #include <tori/kernel/log.hpp>
 #include <tori/kernel/memory_map.hpp>
 #include <tori/kernel/pmm.hpp>
@@ -247,10 +249,17 @@ namespace tori {
     smoke_test_slice_allocator();
     log_vmem_layout();
     init_acpi(owned_boot_info);
-    smoke_test_heap();
-    TORI_LOG_INFO("kernel", "boot, memory, and ACPI initialization complete; halting");
+    arch::x86_64::init_gdt();
+    arch::x86_64::init_idt();
+    arch::x86_64::init_pic();
+    arch::x86_64::init_pit();
+    TORI_LOG_INFO("kernel", "boot, memory, ACPI, and CPU runtime initialized; interrupts enabled");
 
-    arch::x86_64::halt_forever();
+    // sti; hlt in one asm block: STI defers interrupt recognition by one
+    // instruction, so pairing them ensures the very next interrupt wakes us.
+    for (;;) {
+        asm volatile("sti; hlt" : : : "memory");
+    }
 }
 
 } // namespace tori

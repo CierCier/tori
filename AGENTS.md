@@ -86,6 +86,13 @@ Once implementation starts, changes should keep these checks in mind:
 - Do not put generic utilities in `shared` unless they are part of an intentional kernel/userspace ABI.
 - Prefer clear milestone progress over implementing many partially connected subsystems at once.
 
+## Configuration
+
+- Kernel build-time constants live in `kernel/config.h` as preprocessor defines.
+- All `CONFIG_*` macros must have a comment explaining what they control and the minimum allowed value.
+- Default values target single-CPU QEMU/OVMF. Bump `CONFIG_MAX_CPUS` when SMP support arrives.
+- Do not duplicate config values across source files; always reference `kernel/config.h`.
+
 ## Git Discipline
 
 - Keep commits atomic: each commit must be a single logical change that builds successfully.
