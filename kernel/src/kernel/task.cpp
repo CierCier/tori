@@ -19,6 +19,8 @@ uint64_t total_task_count = 0;
 
 tori::sched::Task* idle_task = nullptr;
 
+volatile bool need_reschedule[CONFIG_MAX_CPUS] = {};
+
 struct ReadyQueue {
     tori::sched::Task* head;
     tori::sched::Task* tail;
@@ -323,6 +325,33 @@ void wake(Task* task) {
     );
 
     __builtin_unreachable();
+}
+
+void flag_preempt() {
+    const uint32_t lapic_id = tori::arch::x86_64::lapic::id();
+    if (lapic_id < CONFIG_MAX_CPUS) {
+        need_reschedule[lapic_id] = true;
+    }
+}
+
+extern "C" bool sched_needs_preempt() {
+    const uint32_t lapic_id = tori::arch::x86_64::lapic::id();
+    return lapic_id < CONFIG_MAX_CPUS && need_reschedule[lapic_id];
+}
+
+extern "C" void sched_do_preempt() {
+    const uint32_t lapic_id = tori::arch::x86_64::lapic::id();
+    if (lapic_id < CONFIG_MAX_CPUS) {
+        need_reschedule[lapic_id] = false;
+    }
+
+    Task* current = current_task();
+    if (current && current->state == TaskState::Running) {
+        current->state = TaskState::Ready;
+        ready_queue_push(&global_ready_queue, current);
+    }
+
+    schedule_internal();
 }
 
 } // namespace tori::sched

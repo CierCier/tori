@@ -2,6 +2,8 @@
 .section .text
 
 .extern handle_interrupt
+.extern sched_needs_preempt
+.extern sched_do_preempt
 .global isr_common_handler
 isr_common_handler:
     push rax
@@ -22,6 +24,12 @@ isr_common_handler:
 
     mov rdi, rsp
     call handle_interrupt
+
+    call sched_needs_preempt
+    test al, al
+    jz .Lno_preempt
+    call sched_do_preempt
+.Lno_preempt:
 
     pop r15
     pop r14

@@ -4,6 +4,7 @@
 #include <tori/kernel/gdt.hpp>
 #include <tori/kernel/lapic.hpp>
 #include <tori/kernel/log.hpp>
+#include <tori/kernel/sched/sched.hpp>
 #include <tori/kernel/time.hpp>
 
 #include "io.hpp"
@@ -136,6 +137,7 @@ extern "C" void handle_interrupt(InterruptFrame *frame) {
   // IRQ 0: Timer (previously PIT, now LAPIC)
   if (vec == 32) {
     tori::time::tick(lapic::id());
+    tori::sched::flag_preempt();
     lapic::eoi();
     return;
   }

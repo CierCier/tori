@@ -221,7 +221,12 @@ Status: **complete**
   - [x] Idle task per CPU (halts when nothing else to run)
   - [x] start_scheduler() one-way boot switch from BSP to first task
   - [x] Round-robin ready queue discipline (pop head, push tail)
-- Add preemptive round-robin scheduler with timer ticks.
+- [x] Add preemptive round-robin scheduler with timer ticks.
+  - [x] Per-CPU need_reschedule flag set by LAPIC timer ISR
+  - [x] Preemption check in ISR common handler (after handle_interrupt)
+  - [x] sched_do_preempt: preempts current task, calls schedule()
+  - [x] schedule_internal picks next ready task, context_switch to it
+  - [x] ISR return unwinds through resumed task's ISR frame naturally
 - [x] Add synchronization primitives.
   - [x] Spinlock, LockGuard, TimedSpinlock (basic busy-wait locks)
   - [x] Mutex, TimedMutex (spin-now, block-later interface)
