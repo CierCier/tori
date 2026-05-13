@@ -29,6 +29,11 @@
 
 namespace {
 
+// Synchronization: ap_main increments when entering idle,
+// kernel_main_task waits before spawning init.
+volatile int g_aps_ready = 0;
+int g_expected_aps = 0;
+
 void log_boot_info(const tori::boot::BootInfo &boot_info) {
   TORI_LOG_INFO("boot", "Tori kernel entered generic kernel_main");
   TORI_LOG_TEXT_VALUE(tori::log::Level::Info, "boot", "bootloader",
@@ -183,6 +188,7 @@ void ap_main(void *arg) {
   TORI_LOG_INFO("kernel", "AP initialized and entering idle loop");
   TORI_LOG_VALUE(tori::log::Level::Info, "kernel", "ap cpu index", cpu_index);
 
+  __atomic_add_fetch(&g_aps_ready, 1, __ATOMIC_RELEASE);
   for (;;) {
     asm volatile("sti; hlt" : : : "memory");
   }
@@ -442,6 +448,7 @@ void kernel_main_task(void *);
 
       owned_boot_info.smp.wake_up_ap(owned_boot_info.smp.cpus[i], ap_main,
                                      &ap_data[i]);
+      ++g_expected_aps;
     }
   }
 
@@ -468,6 +475,13 @@ void kernel_main_task(void *) {
   TORI_LOG_INFO("kernel", "first scheduled task running");
   TORI_LOG_TEXT_VALUE(tori::log::Level::Info, "kernel", "task name",
                       tori::sched::current_task()->name);
+
+  // Wait for all APs to finish their initialization so that AP log
+  // output completes before the init handover message.
+  while (__atomic_load_n(&g_aps_ready, __ATOMIC_ACQUIRE) < g_expected_aps) {
+    asm volatile("pause" ::: "memory");
+  }
+  tori::log::flush_all();
 
   int init_pid = tori::proc::process_spawn("/sys/init");
   if (init_pid < 0) {

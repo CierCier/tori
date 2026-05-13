@@ -125,13 +125,12 @@ void format_entry(const tori::log::LogEntry& entry) {
 
     if (!to_serial && !to_fb) return;
 
-    // We still use write_sink which writes to both, but we could split them
-    // for more efficiency. For now, let's keep it simple as per handoff.
-    // The handoff mentions sink masks.
-    
-    // A more precise implementation would call serial and fb separately.
+    // Hold the serial lock for the entire entry so that init's sys_write
+    // cannot interleave fragments between multiple write_string calls.
+    if (to_serial) tori::arch::x86_64::serial::lock();
+
     auto write_to_active_sinks = [&](const char* text, unsigned color) {
-        if (to_serial) tori::arch::x86_64::serial::write_string(text);
+        if (to_serial) tori::arch::x86_64::serial::write_string_locked(text);
         if (to_fb) tori::log::framebuffer_console::write_string(text, color);
     };
 
@@ -187,6 +186,8 @@ void format_entry(const tori::log::LogEntry& entry) {
     }
 
     write_to_active_sinks("\n", color);
+
+    if (to_serial) tori::arch::x86_64::serial::unlock();
 }
 
 void push_entry(const tori::log::LogEntry& entry) {
