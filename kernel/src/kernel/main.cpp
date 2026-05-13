@@ -13,6 +13,7 @@
 #include <tori/kernel/slice_allocator.hpp>
 #include <tori/kernel/task.hpp>
 #include <tori/kernel/time.hpp>
+#include <tori/kernel/timer.hpp>
 #include <tori/kernel/vmem_layout.hpp>
 
 #include "../arch/x86_64/halt.hpp"
@@ -131,6 +132,7 @@ void ap_main(void* arg) {
     tori::arch::x86_64::load_tss(cpu_index);
     tori::arch::x86_64::init_idt();
     tori::arch::x86_64::lapic::init(lapic_base);
+    tori::log::init_per_cpu(tori::arch::x86_64::lapic::id());
     tori::arch::x86_64::lapic::init_timer(1000);
 
     TORI_LOG_INFO("kernel", "AP initialized and entering idle loop");
@@ -197,7 +199,10 @@ void kernel_main_task(void*);
 
     if (madt_header != nullptr) {
         tori::arch::x86_64::lapic::init(madt_info.local_apic_address);
+        tori::log::init_per_cpu(owned_boot_info.smp.bsp_lapic_id);
         tori::arch::x86_64::lapic::init_timer(1000);
+        tori::timer::init();
+        tori::log::init_timer_flush();
     }
 
     tori::sched::init_task_system(owned_boot_info.smp.bsp_lapic_id);
@@ -235,16 +240,12 @@ void kernel_main_task(void*);
 
 void kernel_main_task(void*) {
     TORI_LOG_INFO("kernel", "first scheduled task running");
-    TORI_LOG_VALUE(tori::log::Level::Info, "kernel", "current task id", tori::sched::current_task()->id);
-    TORI_LOG_TEXT_VALUE(tori::log::Level::Info, "kernel", "current task name", tori::sched::current_task()->name);
+    TORI_LOG_TEXT_VALUE(tori::log::Level::Info, "kernel", "task name", tori::sched::current_task()->name);
 
-    TORI_LOG_INFO("kernel", "yielding to idle task");
-    tori::sched::yield();
-
-    TORI_LOG_INFO("kernel", "back in kernel-main task after yield");
+    TORI_LOG_INFO("kernel", "kernel-main yielding forever");
 
     for (;;) {
-        asm volatile("sti; hlt" : : : "memory");
+        tori::sched::yield();
     }
 }
 

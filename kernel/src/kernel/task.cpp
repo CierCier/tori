@@ -20,6 +20,7 @@ uint64_t total_task_count = 0;
 tori::sched::Task* idle_task = nullptr;
 
 volatile bool need_reschedule[CONFIG_MAX_CPUS] = {};
+static volatile bool scheduler_active = false;
 
 struct ReadyQueue {
     tori::sched::Task* head;
@@ -124,6 +125,7 @@ void ready_queue_remove(ReadyQueue* rq, tori::sched::Task* task) {
 
 void idle_entry(void*) {
     for (;;) {
+        tori::log::flush();
         asm volatile("sti; hlt" : : : "memory");
     }
 }
@@ -147,7 +149,70 @@ void schedule_internal() {
 
     next->state = tori::sched::TaskState::Running;
     tori::sched::set_current_task(next);
+
+    if (current == nullptr) {
+        void* ctx = next->context;
+        asm volatile(
+            "movq %0, %%rsp\n\t"
+            "popq %%rbx\n\t"
+            "popq %%rbp\n\t"
+            "popq %%r12\n\t"
+            "popq %%r13\n\t"
+            "popq %%r14\n\t"
+            "popq %%r15\n\t"
+            "ret\n\t"
+            :
+            : "r"(ctx)
+            : "memory"
+        );
+        __builtin_unreachable();
+    }
+
     tori::sched::context_switch(&current->context, next->context);
+}
+
+static tori::sched::Task* create_task_internal(void (*entry)(void*), void* arg, const char* name) {
+    auto* task = allocate_task();
+    if (task == nullptr) {
+        TORI_LOG_WARN("sched", "failed to allocate task struct");
+        return nullptr;
+    }
+
+    const uint64_t stack_phys = tori::memory::pmm::alloc_pages(stack_pages);
+    if (stack_phys == tori::memory::pmm::invalid_physical_address) {
+        TORI_LOG_WARN("sched", "failed to allocate task stack");
+        tori::memory::kfree(task, sizeof(tori::sched::Task));
+        return nullptr;
+    }
+
+    auto* stack_virt = static_cast<uint8_t*>(
+        tori::memory::address::physical_to_virtual(stack_phys));
+
+    task->id = next_task_id++;
+    copy_name(task->name, name, sizeof(task->name));
+    task->state = tori::sched::TaskState::Ready;
+    task->stack = {
+        .base = stack_virt,
+        .top = stack_virt + stack_size,
+        .physical_page = stack_phys,
+        .page_count = stack_pages,
+    };
+    task->entry = entry;
+    task->arg = arg;
+    task->creation_time = tori::time::uptime_ms();
+
+    setup_task_stack(task, reinterpret_cast<void*>(tori::sched::task_trampoline));
+
+    ready_queue_push(&global_ready_queue, task);
+
+    list_add(task);
+    ++total_task_count;
+
+    TORI_LOG_INFO("sched", "task created");
+    TORI_LOG_VALUE(tori::log::Level::Info, "sched", "task id", task->id);
+    TORI_LOG_TEXT_VALUE(tori::log::Level::Info, "sched", "task name", task->name);
+
+    return task;
 }
 
 } // namespace
@@ -207,7 +272,7 @@ void init_task_system(uint32_t bsp_lapic_id) {
     list_add(bsp);
     ++total_task_count;
 
-    idle_task = create_task(idle_entry, nullptr, "cpu0-idle");
+    idle_task = create_task_internal(idle_entry, nullptr, "cpu0-idle");
 
     TORI_LOG_INFO("sched", "task system initialized");
     TORI_LOG_VALUE(log::Level::Info, "sched", "bsp lapic id", bsp_lapic_id);
@@ -217,46 +282,7 @@ void init_task_system(uint32_t bsp_lapic_id) {
 
 Task* create_task(void (*entry)(void*), void* arg, const char* name) {
     tori::sync::LockGuard guard(task_lock);
-
-    auto* task = allocate_task();
-    if (task == nullptr) {
-        TORI_LOG_WARN("sched", "failed to allocate task struct");
-        return nullptr;
-    }
-
-    const uint64_t stack_phys = tori::memory::pmm::alloc_pages(stack_pages);
-    if (stack_phys == tori::memory::pmm::invalid_physical_address) {
-        TORI_LOG_WARN("sched", "failed to allocate task stack");
-        tori::memory::kfree(task, sizeof(Task));
-        return nullptr;
-    }
-
-    auto* stack_virt = static_cast<uint8_t*>(
-        tori::memory::address::physical_to_virtual(stack_phys));
-
-    task->id = next_task_id++;
-    copy_name(task->name, name, sizeof(task->name));
-    task->state = TaskState::Ready;
-    task->stack = {
-        .base = stack_virt,
-        .top = stack_virt + stack_size,
-        .physical_page = stack_phys,
-        .page_count = stack_pages,
-    };
-    task->entry = entry;
-    task->arg = arg;
-    task->creation_time = tori::time::uptime_ms();
-
-    setup_task_stack(task, reinterpret_cast<void*>(task_trampoline));
-
-    list_add(task);
-    ++total_task_count;
-
-    TORI_LOG_INFO("sched", "task created");
-    TORI_LOG_VALUE(log::Level::Info, "sched", "task id", task->id);
-    TORI_LOG_TEXT_VALUE(log::Level::Info, "sched", "task name", task->name);
-
-    return task;
+    return create_task_internal(entry, arg, name);
 }
 
 Task* current_task() {
@@ -306,6 +332,8 @@ void wake(Task* task) {
         TORI_PANIC("sched", "no tasks available to start scheduler");
     }
 
+    scheduler_active = true;
+
     next->state = TaskState::Running;
     set_current_task(next);
 
@@ -341,12 +369,15 @@ extern "C" bool sched_needs_preempt() {
 
 extern "C" void sched_do_preempt() {
     const uint32_t lapic_id = tori::arch::x86_64::lapic::id();
-    if (lapic_id < CONFIG_MAX_CPUS) {
-        need_reschedule[lapic_id] = false;
-    }
+    if (lapic_id >= CONFIG_MAX_CPUS) return;
+    need_reschedule[lapic_id] = false;
+
+    if (!scheduler_active) return;
 
     Task* current = current_task();
-    if (current && current->state == TaskState::Running) {
+    if (current == nullptr) return;
+
+    if (current->state == TaskState::Running) {
         current->state = TaskState::Ready;
         ready_queue_push(&global_ready_queue, current);
     }

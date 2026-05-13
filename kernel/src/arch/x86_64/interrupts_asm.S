@@ -4,6 +4,7 @@
 .extern handle_interrupt
 .extern sched_needs_preempt
 .extern sched_do_preempt
+.extern log_flush
 .global isr_common_handler
 isr_common_handler:
     push rax
@@ -30,6 +31,8 @@ isr_common_handler:
     jz .Lno_preempt
     call sched_do_preempt
 .Lno_preempt:
+
+    call log_flush
 
     pop r15
     pop r14

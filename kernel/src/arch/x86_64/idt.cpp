@@ -6,6 +6,7 @@
 #include <tori/kernel/log.hpp>
 #include <tori/kernel/sched/sched.hpp>
 #include <tori/kernel/time.hpp>
+#include <tori/kernel/timer.hpp>
 
 #include "io.hpp"
 
@@ -138,6 +139,7 @@ extern "C" void handle_interrupt(InterruptFrame *frame) {
   if (vec == 32) {
     tori::time::tick(lapic::id());
     tori::sched::flag_preempt();
+    tori::timer::tick();
     lapic::eoi();
     return;
   }
