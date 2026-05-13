@@ -240,6 +240,19 @@ Status: **complete**
   - [x] Integrate spinlock protection into PMM, slice allocator, heap, VMM
 - Upgrade logging to per-CPU/deferred behavior.
 
+### Milestone 6.5: Filesystem Stack
+
+Status: **complete**
+
+- [x] Add VFS core (mount table, fd table, vnode ops, path resolution).
+- [x] Add RamFS (in-memory FS backed by PMM pages).
+- [x] Add Limine boot module plumbing (collect modules into BootInfo).
+- [x] Fix limine.conf MODULE → module_path syntax and HHDM address handling.
+- [x] Add overlayFS (N-layer stacking with whiteout support, merged readdir).
+- [x] Mount overlayFS root at boot: RamFS lower (RO) + RamFS upper (RW).
+- [x] Load initramfs via Limine modules into lower RamFS.
+- [x] Verify end-to-end: open/read/stat through overlayFS returns correct content.
+
 ### Milestone 7: User Boundary
 
 - Define user/kernel address split.

@@ -86,6 +86,9 @@ struct ApStartData {
 // Static storage for CpuInfo array passed to generic kernel
 tori::boot::CpuInfo generic_cpus[CONFIG_MAX_CPUS];
 
+// Static storage for boot module info
+tori::boot::BootModule generic_modules[CONFIG_MAX_BOOT_MODULES];
+
 extern "C" void limine_ap_trampoline(struct limine_mp_info* info) {
     auto* data = reinterpret_cast<ApStartData*>(info->extra_argument);
     data->entry(data->arg);
@@ -249,6 +252,31 @@ tori::boot::BootInfo collect_boot_info() {
     auto* rsdp_response = rsdp_request.response;
     auto* module_response = module_request.response;
 
+    uint64_t module_count = 0;
+    if (module_response != nullptr) {
+        module_count = module_response->module_count;
+        if (module_count > CONFIG_MAX_BOOT_MODULES) {
+            module_count = CONFIG_MAX_BOOT_MODULES;
+        }
+
+        for (uint64_t i = 0; i < module_count; ++i) {
+            auto* file = module_response->modules[i];
+            if (file == nullptr) continue;
+
+            generic_modules[i].address = reinterpret_cast<uint64_t>(file->address);
+            generic_modules[i].size = file->size;
+
+            size_t j = 0;
+            if (file->path != nullptr) {
+                while (j < sizeof(generic_modules[i].path) - 1 && file->path[j]) {
+                    generic_modules[i].path[j] = file->path[j];
+                    ++j;
+                }
+            }
+            generic_modules[i].path[j] = '\0';
+        }
+    }
+
     return {
         .source = tori::boot::BootSource::Limine,
         .bootloader_name = bootloader_response != nullptr ? bootloader_response->name : nullptr,
@@ -262,7 +290,8 @@ tori::boot::BootInfo collect_boot_info() {
         .memory_map = collect_memory_map(),
         .framebuffer = framebuffer,
         .rsdp = rsdp_response != nullptr ? rsdp_response->address : nullptr,
-        .module_count = module_response != nullptr ? module_response->module_count : 0,
+        .module_count = module_count,
+        .modules = module_count > 0 ? generic_modules : nullptr,
         .smp = smp,
         .has_framebuffer = has_framebuffer,
         .has_hhdm = hhdm_response != nullptr,

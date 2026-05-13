@@ -81,6 +81,12 @@ struct CpuInfo {
     void* internal_handle;
 };
 
+struct BootModule {
+    uint64_t address;
+    uint64_t size;
+    char path[256];
+};
+
 struct SmpInfo {
     uint32_t bsp_lapic_id;
     uint64_t cpu_count;
@@ -99,6 +105,7 @@ struct BootInfo {
     Framebuffer framebuffer;
     void* rsdp;
     uint64_t module_count;
+    BootModule* modules;
     SmpInfo smp;
     bool has_framebuffer;
     bool has_hhdm;

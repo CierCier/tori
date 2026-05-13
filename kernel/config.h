@@ -29,3 +29,12 @@
 
 // Log flush timer period in ticks (1 tick = 1ms with current setup).
 #define CONFIG_LOG_FLUSH_PERIOD_TICKS 8
+
+// Maximum number of mounted filesystems.
+#define CONFIG_VFS_MAX_MOUNTS 16
+
+// Maximum number of open file descriptors.
+#define CONFIG_VFS_MAX_FDS 256
+
+// Maximum number of boot modules (Limine initramfs payloads).
+#define CONFIG_MAX_BOOT_MODULES 16

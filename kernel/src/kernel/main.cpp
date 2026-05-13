@@ -14,6 +14,9 @@
 #include <tori/kernel/task.hpp>
 #include <tori/kernel/time.hpp>
 #include <tori/kernel/timer.hpp>
+#include <tori/kernel/vfs.hpp>
+#include <tori/kernel/fs/ramfs.hpp>
+#include <tori/kernel/fs/overlayfs.hpp>
 #include <tori/kernel/vmem_layout.hpp>
 
 #include "../arch/x86_64/halt.hpp"
@@ -205,6 +208,82 @@ void kernel_main_task(void*);
         tori::log::init_timer_flush();
     }
 
+    tori::vfs::init();
+
+    tori::vfs::Vnode* lower_root = nullptr;
+    {
+        int err = tori::vfs::mount(&tori::ramfs::fs_ops, nullptr, &lower_root);
+        if (err < 0) {
+            TORI_PANIC("vfs", "failed to mount root filesystem");
+        }
+        TORI_LOG_INFO("vfs", "root filesystem mounted (RamFS)");
+
+        for (uint64_t i = 0; i < owned_boot_info.module_count; ++i) {
+            auto& mod = owned_boot_info.modules[i];
+            if (mod.size == 0) continue;
+
+            const char* modpath = mod.path;
+            while (*modpath == '/') ++modpath;
+
+            const char* filename = modpath;
+            for (const char* s = modpath; *s; ++s) {
+                if (*s == '/') filename = s + 1;
+            }
+
+            auto* src = reinterpret_cast<const uint8_t*>(mod.address);
+
+            int fd = 0;
+            err = tori::vfs::open(lower_root, filename, tori::vfs::O_CREAT | tori::vfs::O_WRONLY, &fd);
+            if (err < 0) {
+                TORI_LOG_WARN("vfs", "failed to create module file");
+                continue;
+            }
+
+            size_t written = 0;
+            err = tori::vfs::write(fd, src, static_cast<size_t>(mod.size), &written);
+            if (err < 0) {
+                TORI_LOG_WARN("vfs", "failed to write module data");
+            }
+            tori::vfs::close(fd);
+
+            TORI_LOG_VALUE(tori::log::Level::Info, "vfs", "loaded module",
+                          static_cast<uint64_t>(mod.size));
+        }
+    }
+
+    {
+        // Create writable upper layer for overlayFS
+        tori::vfs::Vnode* upper_root = nullptr;
+        int err = tori::ramfs::fs_ops.mount(&upper_root);
+        if (err < 0 || !upper_root) {
+            TORI_PANIC("vfs", "failed to create upper RamFS for overlay");
+        }
+
+        tori::overlayfs::Layer layers[2];
+        layers[0].root = lower_root;
+        layers[0].writable = false;
+        layers[1].root = upper_root;
+        layers[1].writable = true;
+
+        err = tori::overlayfs::init(layers, 2);
+        if (err < 0) {
+            TORI_PANIC("vfs", "failed to init overlayFS");
+        }
+
+        tori::vfs::Vnode* overlay_root = nullptr;
+        err = tori::overlayfs::fs_ops.mount(&overlay_root);
+        if (err < 0 || !overlay_root) {
+            TORI_PANIC("vfs", "failed to mount overlayFS root");
+        }
+
+        err = tori::vfs::set_root(overlay_root);
+        if (err < 0) {
+            TORI_PANIC("vfs", "failed to set overlayFS as root");
+        }
+
+        TORI_LOG_INFO("vfs", "overlayFS root active (lower=RamFS, upper=RamFS)");
+    }
+
     tori::sched::init_task_system(owned_boot_info.smp.bsp_lapic_id);
 
     // AP Initialization
@@ -241,6 +320,32 @@ void kernel_main_task(void*);
 void kernel_main_task(void*) {
     TORI_LOG_INFO("kernel", "first scheduled task running");
     TORI_LOG_TEXT_VALUE(tori::log::Level::Info, "kernel", "task name", tori::sched::current_task()->name);
+
+    {
+        int fd = 0;
+        int err = tori::vfs::open(nullptr, "/hello.txt", tori::vfs::O_RDONLY, &fd);
+        if (err < 0) {
+            TORI_LOG_WARN("vfs", "could not open /hello.txt through overlay");
+        } else {
+            TORI_LOG_INFO("vfs", "opened /hello.txt through overlay");
+
+            tori::vfs::Stat st;
+            err = tori::vfs::stat(fd, &st);
+            if (err == 0) {
+                TORI_LOG_VALUE(tori::log::Level::Info, "vfs", "hello.txt size", st.size);
+            }
+
+            char buf[128];
+            size_t got = 0;
+            err = tori::vfs::read(fd, buf, sizeof(buf) - 1, &got);
+            if (err == 0) {
+                buf[got] = '\0';
+                TORI_LOG_TEXT_VALUE(tori::log::Level::Info, "vfs", "hello.txt content", buf);
+            }
+
+            tori::vfs::close(fd);
+        }
+    }
 
     TORI_LOG_INFO("kernel", "kernel-main yielding forever");
 
