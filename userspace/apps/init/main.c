@@ -6,5 +6,11 @@ int main(int argc, char **argv, char **envp) {
   (void)envp;
   const char msg[] = "Kernel Handover to init\n";
   write(1, msg, sizeof(msg) - 1);
+
+  const char msg2[] = "spinlocing init for now\n";
+  for (int i = 0; i < 10000; i++) {
+    write(1, msg2, sizeof(msg2));
+  }
+
   _Exit(0);
 }

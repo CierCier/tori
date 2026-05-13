@@ -43,15 +43,15 @@ void init_process_system() {
     for (size_t i = 0; i < pid_bitmap_words; ++i) {
         pid_bitmap[i] = 0;
     }
-    pid_bitmap[0] |= 1ULL << 0;
-    next_pid_hint = 1;
+    // PID 0 is left free — it will be allocated to the first process (init).
+    next_pid_hint = 0;
     process_list = nullptr;
     system_initialized = true;
     TORI_LOG_INFO("proc", "process system initialized");
 }
 
 uint64_t pid_alloc() {
-    if (!system_initialized) return 0;
+    if (!system_initialized) return ~0ULL;
 
     for (uint64_t w = 0; w < pid_bitmap_words; ++w) {
         uint64_t idx = (next_pid_hint + w) % pid_bitmap_words;
@@ -59,18 +59,18 @@ uint64_t pid_alloc() {
         for (uint64_t b = 0; b < 64; ++b) {
             if (!(pid_bitmap[idx] & (1ULL << b))) {
                 uint64_t pid = idx * 64 + b;
-                if (pid >= max_pids) return 0;
+                if (pid >= max_pids) return ~0ULL;
                 pid_bitmap[idx] |= 1ULL << b;
                 next_pid_hint = (pid + 1) % max_pids;
                 return pid;
             }
         }
     }
-    return 0;
+    return ~0ULL;
 }
 
 void pid_free(uint64_t pid) {
-    if (pid == 0 || pid >= max_pids || !system_initialized) return;
+    if (pid >= max_pids || !system_initialized) return;
     uint64_t idx = pid / 64;
     uint64_t bit = pid % 64;
     pid_bitmap[idx] &= ~(1ULL << bit);
@@ -91,7 +91,7 @@ Process* process_create(uintptr_t pml4_phys) {
     }
 
     uint64_t pid = pid_alloc();
-    if (pid == 0) {
+    if (pid == ~0ULL) {
         TORI_LOG_ERROR("proc", "failed to allocate PID (system not init or out of PIDs)");
         tori::memory::kfree(proc, sizeof(Process));
         return nullptr;
