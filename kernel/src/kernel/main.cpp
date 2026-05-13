@@ -18,6 +18,7 @@
 #include <tori/kernel/fs/ramfs.hpp>
 #include <tori/kernel/fs/overlayfs.hpp>
 #include <tori/kernel/vmem_layout.hpp>
+#include <tori/kernel/vmm.hpp>
 
 #include "../arch/x86_64/halt.hpp"
 
@@ -171,8 +172,22 @@ void kernel_main_task(void*);
     memory::pmm::init(owned_boot_info);
     memory::slice::init(owned_boot_info.hhdm_offset);
     memory::heap::init();
+    memory::vmm::init();
+
     owned_boot_info.memory_map = copy_memory_map(owned_boot_info.memory_map);
     log_vmem_layout();
+
+    {
+        uint64_t max_phys = 0;
+        for (size_t i = 0; i < owned_boot_info.memory_map.region_count; ++i) {
+            const auto region = boot::memory_region_at(owned_boot_info.memory_map, i);
+            const uint64_t end = region.base + region.length;
+            if (end > max_phys) max_phys = end;
+        }
+        const uint64_t hhdm_top = owned_boot_info.hhdm_offset + max_phys;
+        memory::vmm::init_vmem_ranges(hhdm_top);
+    }
+
     init_acpi(owned_boot_info);
 
     const tori::acpi::SDTHeader* madt_header = tori::acpi::find_table(static_cast<const tori::acpi::RSDP*>(owned_boot_info.rsdp), "APIC");

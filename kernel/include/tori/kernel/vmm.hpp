@@ -4,6 +4,7 @@
 
 namespace tori::memory::vmm {
 
+// Page table entry flags for map_page.
 enum class Flags : uint64_t {
     None          = 0,
     Present       = (1ULL << 0),
@@ -23,8 +24,36 @@ inline bool operator&(Flags a, Flags b) {
     return (static_cast<uint64_t>(a) & static_cast<uint64_t>(b)) != 0;
 }
 
-// Maps a single 4KiB page.
-// If intermediate tables are missing, they will be allocated via PMM.
-void map_page(uint64_t virtual_address, uint64_t physical_address, Flags flags);
+// Capture the active page table (CR3) as the kernel's own.
+// Must be called once during boot, before any map/unmap operations.
+void init();
+
+// The kernel's PML4 physical address (set by init).
+uint64_t kernel_pml4();
+
+// Maps a single 4KiB page in the given address space.
+// pml4_phys: 0 means the kernel page table.
+// If intermediate tables are missing, they are allocated via PMM.
+void map_page(uint64_t virtual_address, uint64_t physical_address, Flags flags,
+              uint64_t pml4_phys = 0);
+
+// Unmaps a single 4KiB page in the given address space.
+// Frees any intermediate page table pages that become empty.
+// pml4_phys: 0 means the kernel page table.
+void unmap_page(uint64_t virtual_address, uint64_t pml4_phys = 0);
+
+// --- Kernel virtual address range allocator ---
+
+// Initialize the kernel vmem range allocator.
+// hhdm_top: first virtual address past the HHDM mapping.
+// Free ranges are tracked from hhdm_top to the kernel image base.
+void init_vmem_ranges(uint64_t hhdm_top);
+
+// Allocate a contiguous range of kernel virtual addresses.
+// Returns the base virtual address, or 0 on failure.
+uint64_t alloc_vmem_range(uint64_t size);
+
+// Free a previously allocated range (may be a no-op depending on strategy).
+void free_vmem_range(uint64_t base, uint64_t size);
 
 } // namespace tori::memory::vmm
