@@ -247,4 +247,32 @@ Stats stats() {
     return allocator_stats;
 }
 
+void free_acpi_reclaimable(const boot::MemoryMap& memory_map) {
+    tori::sync::LockGuard guard(pmm_lock);
+
+    Stats before = allocator_stats;
+
+    for (size_t index = 0; index < memory_map.region_count; ++index) {
+        const boot::MemoryRegion region = boot::memory_region_at(memory_map, index);
+        if (region.kind != boot::MemoryKind::AcpiReclaimable) continue;
+        if (region.length == 0 || region.base + region.length < region.base) continue;
+
+        const uint64_t start = align_up(region.base, page_size);
+        uint64_t end = align_down(region.base + region.length, page_size);
+        if (end <= start) continue;
+
+        uint64_t start_page = start / page_size;
+        uint64_t end_page = end / page_size;
+        if (start_page >= max_managed_pages) continue;
+        if (end_page > max_managed_pages) end_page = max_managed_pages;
+
+        for (uint64_t page = start_page; page < end_page; ++page) {
+            mark_page_free(page);
+        }
+    }
+
+    uint64_t freed_pages = allocator_stats.free_pages - before.free_pages;
+    TORI_LOG_VALUE(log::Level::Info, "pmm", "freed ACPI reclaimable pages", freed_pages);
+}
+
 } // namespace tori::memory::pmm

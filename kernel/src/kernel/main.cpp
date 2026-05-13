@@ -181,6 +181,12 @@ void kernel_main_task(void*);
         madt_info = tori::acpi::madt::parse(madt_header);
     }
 
+    // All ACPI table data has been copied into kernel-owned memory.
+    // Release firmware ACPI reclaimable pages back to the PMM.
+    tori::memory::pmm::free_acpi_reclaimable(owned_boot_info.memory_map);
+    owned_boot_info.rsdp = nullptr;
+    owned_boot_info.has_rsdp = false;
+
     // BSP Initialization
     tori::arch::x86_64::init_gdt();
     // We need to find the BSP's index in the CPU list.

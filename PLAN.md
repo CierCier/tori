@@ -112,13 +112,12 @@ Current memory policy:
 - Limine bootloader-reclaimable memory is reclaimed;
 - page zero is reserved;
 - kernel image, modules, framebuffer, reserved, bad, and unknown memory stay reserved;
-- ACPI reclaimable memory stays reserved until ACPI table parsing/copying exists.
+- ACPI reclaimable memory is released after table data is parsed into kernel-owned storage.
 
 Deferred memory work:
 
 - virtual memory manager;
 - page table ownership and remapping policy.
-- reclaim ACPI reclaimable pages after ACPI handling is safe.
 
 ## Milestone Tracker
 

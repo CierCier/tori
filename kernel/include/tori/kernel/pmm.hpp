@@ -25,4 +25,6 @@ void free_pages(uint64_t physical_address, uint64_t page_count);
 bool owns_page(uint64_t physical_address);
 Stats stats();
 
+void free_acpi_reclaimable(const boot::MemoryMap& memory_map);
+
 } // namespace tori::memory::pmm
