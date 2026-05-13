@@ -7,6 +7,7 @@
 #include <tori/kernel/pmm.hpp>
 #include <tori/kernel/sync/spinlock.hpp>
 #include <tori/kernel/time.hpp>
+#include <tori/kernel/vmm.hpp>
 
 namespace {
 
@@ -152,8 +153,10 @@ void schedule_internal() {
 
     if (current == nullptr) {
         void* ctx = next->context;
+        uint64_t next_cr3 = next->cr3;
         asm volatile(
-            "movq %0, %%rsp\n\t"
+            "mov %0, %%cr3\n\t"
+            "movq %1, %%rsp\n\t"
             "popq %%rbx\n\t"
             "popq %%rbp\n\t"
             "popq %%r12\n\t"
@@ -162,13 +165,13 @@ void schedule_internal() {
             "popq %%r15\n\t"
             "ret\n\t"
             :
-            : "r"(ctx)
+            : "r"(next_cr3), "r"(ctx)
             : "memory"
         );
         __builtin_unreachable();
     }
 
-    tori::sched::context_switch(&current->context, next->context);
+    tori::sched::context_switch(&current->context, next->context, next->cr3);
 }
 
 static tori::sched::Task* create_task_internal(void (*entry)(void*), void* arg, const char* name) {
@@ -200,6 +203,8 @@ static tori::sched::Task* create_task_internal(void (*entry)(void*), void* arg, 
     task->entry = entry;
     task->arg = arg;
     task->creation_time = tori::time::uptime_ms();
+    task->thread = nullptr;
+    task->cr3 = tori::memory::vmm::kernel_pml4();
 
     setup_task_stack(task, reinterpret_cast<void*>(tori::sched::task_trampoline));
 
@@ -264,6 +269,8 @@ void init_task_system(uint32_t bsp_lapic_id) {
     bsp->entry = nullptr;
     bsp->arg = nullptr;
     bsp->creation_time = tori::time::uptime_ms();
+    bsp->thread = nullptr;
+    bsp->cr3 = tori::memory::vmm::kernel_pml4();
 
     if (bsp_lapic_id < CONFIG_MAX_CPUS) {
         current_tasks[bsp_lapic_id] = bsp;
@@ -338,8 +345,10 @@ void wake(Task* task) {
     set_current_task(next);
 
     void* ctx = next->context;
+    uint64_t next_cr3 = next->cr3;
     asm volatile(
-        "movq %0, %%rsp\n\t"
+        "mov %0, %%cr3\n\t"
+        "movq %1, %%rsp\n\t"
         "popq %%rbx\n\t"
         "popq %%rbp\n\t"
         "popq %%r12\n\t"
@@ -348,7 +357,7 @@ void wake(Task* task) {
         "popq %%r15\n\t"
         "ret\n\t"
         :
-        : "r"(ctx)
+        : "r"(next_cr3), "r"(ctx)
         : "memory"
     );
 
@@ -383,6 +392,19 @@ extern "C" void sched_do_preempt() {
     }
 
     schedule_internal();
+}
+
+void sched_enqueue(Task* task) {
+    tori::sync::LockGuard guard(task_lock);
+
+    if (task->id == 0) {
+        task->id = next_task_id++;
+    }
+
+    task->state = TaskState::Ready;
+    ready_queue_push(&global_ready_queue, task);
+    list_add(task);
+    ++total_task_count;
 }
 
 } // namespace tori::sched

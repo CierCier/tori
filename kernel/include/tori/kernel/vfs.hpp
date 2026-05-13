@@ -69,6 +69,10 @@ struct FileDescriptor {
     bool used;
 };
 
+struct FdTable {
+    FileDescriptor fds[CONFIG_VFS_MAX_FDS];
+};
+
 void init();
 
 int mount(FilesystemOps* fs_ops, Vnode* target, Vnode** out_root);

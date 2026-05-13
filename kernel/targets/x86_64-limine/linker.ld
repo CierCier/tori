@@ -33,6 +33,18 @@ SECTIONS
         *(.rodata .rodata.*)
     } :rodata
 
+    .eh_frame : {
+        __eh_frame_start = .;
+        *(.eh_frame)
+        __eh_frame_end = .;
+    } :rodata
+
+    .eh_frame_hdr : {
+        __eh_frame_hdr_start = .;
+        *(.eh_frame_hdr)
+        __eh_frame_hdr_end = .;
+    } :rodata
+
     . = ALIGN(0x1000);
 
     .data : {
@@ -48,7 +60,6 @@ SECTIONS
     __kernel_virtual_end = .;
 
     /DISCARD/ : {
-        *(.eh_frame)
         *(.note .note.*)
         *(.comment)
     }

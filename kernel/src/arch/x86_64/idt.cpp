@@ -111,6 +111,10 @@ void dump_frame(const InterruptFrame *frame) {
 void handle_exception(InterruptFrame *frame) {
   dump_frame(frame);
 
+  // Print stack trace from the faulting context
+  uint64_t rsp_at_fault = (uint64_t)(frame + 1);
+  tori::log::print_stack_trace_from(frame->rip, rsp_at_fault, frame->rbp);
+
   if (frame->vector == 14) {
     // Page fault: dump CR2
     uint64_t cr2 = 0;

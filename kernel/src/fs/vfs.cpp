@@ -1,6 +1,9 @@
 #include <tori/kernel/vfs.hpp>
 
 #include <tori/kernel/log.hpp>
+#include <tori/kernel/task.hpp>
+#include <tori/kernel/process/thread.hpp>
+#include <tori/kernel/process/process.hpp>
 
 namespace {
 
@@ -13,13 +16,25 @@ struct MountEntry {
 };
 
 MountEntry mount_table[CONFIG_VFS_MAX_MOUNTS];
-tori::vfs::FileDescriptor fd_table[CONFIG_VFS_MAX_FDS];
+tori::vfs::FdTable kernel_fd_table;
 Vnode* root_vnode = nullptr;
 bool initialized = false;
 
+static tori::vfs::FdTable* get_current_fd_table() {
+    auto* task = tori::sched::current_task();
+    if (task && task->thread) {
+        auto* thread = static_cast<tori::proc::Thread*>(task->thread);
+        if (thread->process) {
+            return &thread->process->fd_table;
+        }
+    }
+    return &kernel_fd_table;
+}
+
 int find_free_fd() {
+    auto* fd_table = get_current_fd_table();
     for (size_t i = 0; i < CONFIG_VFS_MAX_FDS; ++i) {
-        if (!fd_table[i].used) return static_cast<int>(i);
+        if (!fd_table->fds[i].used) return static_cast<int>(i);
     }
     return E_NO_SPACE;
 }
@@ -104,7 +119,7 @@ void init() {
         mount_table[i].used = false;
     }
     for (size_t i = 0; i < CONFIG_VFS_MAX_FDS; ++i) {
-        fd_table[i].used = false;
+        kernel_fd_table.fds[i].used = false;
     }
     root_vnode = nullptr;
     initialized = true;
@@ -270,11 +285,12 @@ int open(Vnode* base, const char* path, uint32_t flags, int* out_fd) {
     int fd = find_free_fd();
     if (fd < 0) return E_NO_SPACE;
 
+    auto* fd_table = get_current_fd_table();
     vnode_ref(vnode);
-    fd_table[fd].vnode = vnode;
-    fd_table[fd].offset = 0;
-    fd_table[fd].flags = flags;
-    fd_table[fd].used = true;
+    fd_table->fds[fd].vnode = vnode;
+    fd_table->fds[fd].offset = 0;
+    fd_table->fds[fd].flags = flags;
+    fd_table->fds[fd].used = true;
 
     *out_fd = fd;
     return E_SUCCESS;
@@ -282,18 +298,20 @@ int open(Vnode* base, const char* path, uint32_t flags, int* out_fd) {
 
 int close(int fd) {
     if (fd < 0 || fd >= CONFIG_VFS_MAX_FDS) return E_BAD_FD;
-    if (!fd_table[fd].used) return E_BAD_FD;
+    auto* fd_table = get_current_fd_table();
+    if (!fd_table->fds[fd].used) return E_BAD_FD;
 
-    vnode_unref(fd_table[fd].vnode);
-    fd_table[fd].used = false;
+    vnode_unref(fd_table->fds[fd].vnode);
+    fd_table->fds[fd].used = false;
     return E_SUCCESS;
 }
 
 int read(int fd, void* buf, size_t size, size_t* out_read) {
     if (fd < 0 || fd >= CONFIG_VFS_MAX_FDS) return E_BAD_FD;
-    if (!fd_table[fd].used) return E_BAD_FD;
+    auto* fd_table = get_current_fd_table();
+    if (!fd_table->fds[fd].used) return E_BAD_FD;
 
-    auto* f = &fd_table[fd];
+    auto* f = &fd_table->fds[fd];
     if (f->vnode->type != VnodeType::File) return E_IS_DIR;
     if (!f->vnode->ops->read) return E_INVALID;
 
@@ -308,9 +326,10 @@ int read(int fd, void* buf, size_t size, size_t* out_read) {
 
 int write(int fd, const void* buf, size_t size, size_t* out_written) {
     if (fd < 0 || fd >= CONFIG_VFS_MAX_FDS) return E_BAD_FD;
-    if (!fd_table[fd].used) return E_BAD_FD;
+    auto* fd_table = get_current_fd_table();
+    if (!fd_table->fds[fd].used) return E_BAD_FD;
 
-    auto* f = &fd_table[fd];
+    auto* f = &fd_table->fds[fd];
     if (f->vnode->type != VnodeType::File) return E_IS_DIR;
     if (!f->vnode->ops->write) return E_INVALID;
 
@@ -325,9 +344,10 @@ int write(int fd, const void* buf, size_t size, size_t* out_written) {
 
 int readdir(int fd, Dirent* entry) {
     if (fd < 0 || fd >= CONFIG_VFS_MAX_FDS) return E_BAD_FD;
-    if (!fd_table[fd].used) return E_BAD_FD;
+    auto* fd_table = get_current_fd_table();
+    if (!fd_table->fds[fd].used) return E_BAD_FD;
 
-    auto* f = &fd_table[fd];
+    auto* f = &fd_table->fds[fd];
     if (f->vnode->type != VnodeType::Directory) return E_NOT_DIR;
     if (!f->vnode->ops->readdir) return E_INVALID;
 
@@ -336,9 +356,10 @@ int readdir(int fd, Dirent* entry) {
 
 int stat(int fd, Stat* stat) {
     if (fd < 0 || fd >= CONFIG_VFS_MAX_FDS) return E_BAD_FD;
-    if (!fd_table[fd].used) return E_BAD_FD;
+    auto* fd_table = get_current_fd_table();
+    if (!fd_table->fds[fd].used) return E_BAD_FD;
 
-    auto* f = &fd_table[fd];
+    auto* f = &fd_table->fds[fd];
     if (!f->vnode->ops->stat) return E_INVALID;
 
     return f->vnode->ops->stat(f->vnode, stat);
@@ -346,9 +367,10 @@ int stat(int fd, Stat* stat) {
 
 int seek(int fd, int64_t offset, int whence, uint64_t* out_pos) {
     if (fd < 0 || fd >= CONFIG_VFS_MAX_FDS) return E_BAD_FD;
-    if (!fd_table[fd].used) return E_BAD_FD;
+    auto* fd_table = get_current_fd_table();
+    if (!fd_table->fds[fd].used) return E_BAD_FD;
 
-    auto* f = &fd_table[fd];
+    auto* f = &fd_table->fds[fd];
     uint64_t new_offset;
 
     if (whence == 0) {
@@ -380,3 +402,4 @@ void vnode_unref(Vnode* vnode) {
 }
 
 } // namespace tori::vfs
+

@@ -245,4 +245,28 @@ void free_vmem_range(uint64_t base, uint64_t /*size*/) {
     (void)base;
 }
 
+uint64_t create_user_pml4() {
+    tori::sync::LockGuard guard(vmm_lock);
+
+    if (!kernel_pml4_phys) return 0;
+
+    uint64_t new_pml4_phys = tori::memory::pmm::alloc_page();
+    if (new_pml4_phys == tori::memory::pmm::invalid_physical_address) {
+        return 0;
+    }
+
+    PageTable* new_pml4 = get_table(new_pml4_phys);
+    PageTable* kernel_pml4 = get_table(kernel_pml4_phys);
+
+    for (int i = 0; i < 512; ++i) {
+        new_pml4->entries[i] = 0;
+    }
+
+    for (int i = 256; i < 512; ++i) {
+        new_pml4->entries[i] = kernel_pml4->entries[i];
+    }
+
+    return new_pml4_phys;
+}
+
 } // namespace tori::memory::vmm

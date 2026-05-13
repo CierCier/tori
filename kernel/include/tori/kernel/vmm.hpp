@@ -56,4 +56,9 @@ uint64_t alloc_vmem_range(uint64_t size);
 // Free a previously allocated range (may be a no-op depending on strategy).
 void free_vmem_range(uint64_t base, uint64_t size);
 
+// Allocate a new PML4 for a userspace process.
+// Kernel-space entries (indices 256-511) are cloned from the kernel PML4.
+// Returns the physical address of the new PML4, or 0 on failure.
+uint64_t create_user_pml4();
+
 } // namespace tori::memory::vmm

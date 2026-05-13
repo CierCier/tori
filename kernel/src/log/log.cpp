@@ -368,6 +368,41 @@ void init_per_cpu(uint32_t lapic_id) {
     any_cpu_initialized = true;
 }
 
+void print_stack_trace_from(uint64_t rip, uint64_t rsp, uint64_t rbp) {
+    uint64_t frames[32];
+    int count = tori::stacktrace::collect(rip, rsp, rbp, frames, 32);
+    if (count <= 0) return;
+
+    write_sink("\nStack trace:\n", color_panic);
+    for (int i = 0; i < count; ++i) {
+        write_sink("  #", color_panic);
+        write_dec(i, color_panic);
+        write_sink(" [", color_panic);
+
+        uint64_t offset;
+        const char* name = tori::stacktrace::resolve(frames[i], offset);
+        if (name) {
+            write_sink(name, color_panic);
+            if (offset > 0) {
+                write_sink("+", color_panic);
+                write_hex(offset, color_panic);
+            }
+        } else {
+            write_hex(frames[i], color_panic);
+        }
+        write_sink("]\n", color_panic);
+    }
+}
+
+void print_stack_trace() {
+    uint64_t frame_rbp;
+    asm volatile("mov %%rbp, %0" : "=r"(frame_rbp));
+    uint64_t caller_rbp = *(uint64_t*)frame_rbp;
+    uint64_t caller_rip = *(uint64_t*)(frame_rbp + 8);
+    uint64_t caller_rsp = frame_rbp + 16;
+    print_stack_trace_from(caller_rip, caller_rsp, caller_rbp);
+}
+
 [[noreturn]] void panic(const char* category, const char* file, int line, const char* message) {
     // Synchronously drain everything
     tori::sync::LockGuard guard(log_lock);
@@ -399,6 +434,14 @@ void init_per_cpu(uint32_t lapic_id) {
     write_sink(":", color);
     write_dec(line, color);
     write_sink("\n", color);
+
+    // Print stack trace from caller's context
+    uint64_t frame_rbp;
+    asm volatile("mov %%rbp, %0" : "=r"(frame_rbp));
+    uint64_t caller_rbp = *(uint64_t*)frame_rbp;
+    uint64_t caller_rip = *(uint64_t*)(frame_rbp + 8);
+    uint64_t caller_rsp = frame_rbp + 16;
+    print_stack_trace_from(caller_rip, caller_rsp, caller_rbp);
 
     for (;;) {
         asm volatile("cli; hlt" : : : "memory");

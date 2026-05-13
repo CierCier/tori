@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #include <tori/kernel/boot_info.hpp>
+#include <tori/kernel/stacktrace.hpp>
 #include <config.h>
 
 namespace tori::log {
@@ -23,6 +24,9 @@ void write(Level level, const char* category, const char* file, int line, const 
 void write_value(Level level, const char* category, const char* file, int line, const char* label, uint64_t value);
 void write_text_value(Level level, const char* category, const char* file, int line, const char* label, const char* value);
 [[noreturn]] void panic(const char* category, const char* file, int line, const char* message);
+
+void print_stack_trace();
+void print_stack_trace_from(uint64_t rip, uint64_t rsp, uint64_t rbp);
 
 void init_per_cpu(uint32_t lapic_id);
 void flush();

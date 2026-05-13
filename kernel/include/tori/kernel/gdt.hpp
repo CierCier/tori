@@ -12,9 +12,10 @@ enum GDTIndex : uint16_t {
     GDT_NULL          = 0,
     GDT_KERNEL_CODE   = 1,
     GDT_KERNEL_DATA   = 2,
-    GDT_USER_CODE     = 3,
+    GDT_USER_DATA_32  = 3,   // Base for SYSRET
     GDT_USER_DATA     = 4,
-    GDT_TSS_FIRST     = 5,   // + 2 per CPU for TSS descriptor
+    GDT_USER_CODE     = 5,
+    GDT_TSS_FIRST     = 6,   // + 2 per CPU for TSS descriptor
 };
 
 inline constexpr uint16_t gdt_selector(GDTIndex idx) {
@@ -32,8 +33,8 @@ struct TSS {
     uint16_t iopb_offset;
 } __attribute__((packed));
 
-// Total GDT entries: 5 fixed + 2 per CPU (TSS descriptor is 16 bytes)
-inline constexpr size_t gdt_total_entries = 5 + 2 * CONFIG_MAX_CPUS;
+// Total GDT entries: 6 fixed + 2 per CPU (TSS descriptor is 16 bytes)
+inline constexpr size_t gdt_total_entries = 6 + 2 * CONFIG_MAX_CPUS;
 
 void init_gdt();
 

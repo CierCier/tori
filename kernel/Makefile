@@ -11,6 +11,7 @@ CC        ?= clang
 CXX       ?= clang++
 LD        ?= clang++
 AS        ?= clang
+NM        ?= llvm-nm
 
 KERNEL_DIR         := $(realpath $(dir $(lastword $(MAKEFILE_LIST))))
 KERNEL_OUTPUT_DIR  ?= $(KERNEL_DIR)/build
@@ -28,13 +29,16 @@ COMMON_FLAGS := --target=x86_64-unknown-none \
                 -ffreestanding -fno-builtin -fno-PIC \
                 -fno-stack-protector -mno-red-zone \
                 -mno-80387 -mno-mmx -mno-sse -mno-sse2 \
-                -mcmodel=kernel
+                -mcmodel=kernel \
+                -fasynchronous-unwind-tables -fno-omit-frame-pointer \
+                -g
 
 CXXFLAGS := $(COMMON_FLAGS) -std=c++20 -fno-exceptions -fno-rtti
 ASFLAGS  := --target=x86_64-unknown-none
 LDFLAGS  := --target=x86_64-unknown-none \
             -fuse-ld=lld -nostdlib -static \
             -Wl,-z,max-page-size=0x1000 \
+            -Wl,--eh-frame-hdr \
             -Wl,-T,$(KERNEL_DIR)/targets/x86_64-limine/linker.ld
 
 # Generated ISR stubs (256 explicit entries, no macro expansion needed)
@@ -49,7 +53,10 @@ GEN_OBJS := $(OBJ_DIR)/gen/isr_stubs.o
 ALL_OBJS := $(CPP_OBJS) $(ASM_OBJS) $(GEN_OBJS)
 DEPS     := $(ALL_OBJS:.o=.d)
 
-KERNEL_ELF := $(BIN_DIR)/kernel.elf
+KERNEL_ELF    := $(BIN_DIR)/kernel.elf
+KERNEL_ELF_TMP := $(BIN_DIR)/.kernel.elf.tmp
+SYMTAB_SRC    := $(GEN_DIR)/symbol_table.cpp
+SYMTAB_OBJ    := $(OBJ_DIR)/gen/symbol_table.o
 
 # Exception vectors that push an error code
 ERR_VECTORS := 8 10 11 12 13 14 17 21
@@ -58,9 +65,33 @@ ERR_VECTORS := 8 10 11 12 13 14 17 21
 
 all: $(KERNEL_ELF)
 
-# Link
-$(KERNEL_ELF): $(ALL_OBJS) $(KERNEL_DIR)/targets/x86_64-limine/linker.ld | $(BIN_DIR)
+# First pass: link without symbol table
+$(KERNEL_ELF_TMP): $(ALL_OBJS) $(KERNEL_DIR)/targets/x86_64-limine/linker.ld | $(BIN_DIR)
 	$(LD) $(LDFLAGS) -o $@ $(ALL_OBJS)
+
+# Generate symbol table from first-pass ELF
+$(SYMTAB_SRC): $(KERNEL_ELF_TMP) | $(GEN_DIR)
+	@echo '  GEN     $(notdir $(SYMTAB_SRC))'
+	@{ \
+	    echo '#include <stdint.h>'; \
+	    echo '#include <stddef.h>'; \
+	    echo 'struct __attribute__((packed)) _sym { uint64_t a; const char* n; };'; \
+	    echo 'extern "C" _sym __kernel_symtab_start[] = {'; \
+	    $(NM) -n '$<' 2>/dev/null | awk '$$2 ~ /^[TtDdWw]$$/ && $$3 != "" { gsub(/"/, "\\\"", $$3); printf "    {0x%s, \"%s\"},\n", $$1, $$3 }'; \
+	    echo '};'; \
+	    echo 'extern "C" size_t __kernel_symtab_count = sizeof(__kernel_symtab_start) / sizeof(__kernel_symtab_start[0]);'; \
+	} > $@
+
+# Compile symbol table
+$(SYMTAB_OBJ): $(SYMTAB_SRC)
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c -o $@ $<
+
+# Final link with symbol table
+$(KERNEL_ELF): $(ALL_OBJS) $(SYMTAB_OBJ) $(KERNEL_DIR)/targets/x86_64-limine/linker.ld | $(BIN_DIR)
+	$(LD) $(LDFLAGS) -o $@ $(ALL_OBJS) $(SYMTAB_OBJ)
+
+.SECONDARY: $(KERNEL_ELF_TMP)
 
 # Generate ISR stubs: 256 individual stubs + address table
 $(GEN_STUBS): | $(GEN_DIR)

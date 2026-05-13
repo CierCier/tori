@@ -45,13 +45,22 @@ add_custom_command(
 
 add_custom_target(tori_limine DEPENDS ${TORI_LIMINE_STAMP})
 
+# Init binary built from userspace
+set(TORI_INIT_BINARY ${CMAKE_BINARY_DIR}/init/init.elf)
+
+# Staging rootfs directory in the build tree
+set(TORI_ROOTFS_STAGING ${CMAKE_BINARY_DIR}/rootfs-staging)
 set(TORI_ROOTFS_FAT ${CMAKE_BINARY_DIR}/rootfs.fat)
-set(TORI_ROOTFS_SRC ${PROJECT_SOURCE_DIR}/iso/rootfs)
 
 add_custom_command(
     OUTPUT ${TORI_ROOTFS_FAT}
-    COMMAND sh ${PROJECT_SOURCE_DIR}/scripts/mkrootfs.sh ${TORI_ROOTFS_FAT} ${TORI_ROOTFS_SRC}
-    COMMENT "Creating rootfs FAT image"
+    COMMAND ${CMAKE_COMMAND} -E rm -rf ${TORI_ROOTFS_STAGING}
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${PROJECT_SOURCE_DIR}/iso/rootfs ${TORI_ROOTFS_STAGING}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${TORI_ROOTFS_STAGING}/sys
+    COMMAND ${CMAKE_COMMAND} -E copy ${TORI_INIT_BINARY} ${TORI_ROOTFS_STAGING}/sys/init
+    COMMAND sh ${PROJECT_SOURCE_DIR}/scripts/mkrootfs.sh ${TORI_ROOTFS_FAT} ${TORI_ROOTFS_STAGING}
+    DEPENDS tori_init
+    COMMENT "Creating rootfs FAT image with init binary"
 )
 
 add_custom_target(tori_iso_root

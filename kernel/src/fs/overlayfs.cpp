@@ -11,25 +11,22 @@ using namespace tori::vfs;
 constexpr const char* WHITEOUT_PREFIX = ".wh.";
 constexpr size_t WHITEOUT_PREFIX_LEN = 4;
 
-struct OverlayNode {
-    Vnode* real_node;
-    Vnode* overlay_parent;
-};
-
 struct MergedEntry {
     char name[256];
     VnodeType type;
 };
 
-struct OverlayDir {
-    tori::overlayfs::Layer* layers;
-    size_t layer_count;
+constexpr size_t MAX_LAYERS = 8;
+
+struct OverlayVnode {
+    Vnode* layer_roots[MAX_LAYERS];
+    
+    // Directory specific:
     MergedEntry* merged;
     size_t merged_count;
     bool cached;
 };
 
-constexpr size_t MAX_LAYERS = 8;
 tori::overlayfs::Layer g_layers[MAX_LAYERS];
 size_t g_layer_count = 0;
 bool g_initialized = false;
@@ -60,6 +57,16 @@ bool name_eq(const char* a, const char* b) {
     }
 }
 
+OverlayVnode* alloc_overlay_vnode() {
+    auto* ovn = static_cast<OverlayVnode*>(tori::memory::kalloc(sizeof(OverlayVnode), alignof(OverlayVnode)));
+    if (!ovn) return nullptr;
+    for (size_t i = 0; i < MAX_LAYERS; ++i) ovn->layer_roots[i] = nullptr;
+    ovn->merged = nullptr;
+    ovn->merged_count = 0;
+    ovn->cached = false;
+    return ovn;
+}
+
 Vnode* alloc_vnode(VnodeType type, void* private_data) {
     auto* vn = static_cast<Vnode*>(tori::memory::kalloc(sizeof(Vnode), alignof(Vnode)));
     if (!vn) return nullptr;
@@ -70,60 +77,61 @@ Vnode* alloc_vnode(VnodeType type, void* private_data) {
     return vn;
 }
 
-void build_merged_list(OverlayDir* odir) {
-    if (odir->cached) return;
+void build_merged_list(OverlayVnode* ovn) {
+    if (ovn->cached) return;
 
     size_t max_total = 0;
-    size_t layer_entry_counts[MAX_LAYERS];
-    for (size_t li = 0; li < odir->layer_count; ++li) {
-        auto* lroot = odir->layers[li].root;
+    for (size_t li = 0; li < g_layer_count; ++li) {
+        auto* lroot = ovn->layer_roots[li];
+        if (!lroot) continue;
+        
         uint64_t offset = 0;
         Dirent d;
-        size_t count = 0;
         while (lroot->ops->readdir(lroot, offset, &d, &offset) == 0) {
-            ++count;
+            max_total++;
         }
-        layer_entry_counts[li] = count;
-        max_total += count;
     }
 
     if (max_total == 0) {
-        odir->merged = nullptr;
-        odir->merged_count = 0;
-        odir->cached = true;
+        ovn->merged = nullptr;
+        ovn->merged_count = 0;
+        ovn->cached = true;
         return;
     }
 
     size_t alloc_size = max_total * sizeof(MergedEntry);
     auto* merged = static_cast<MergedEntry*>(tori::memory::kalloc(alloc_size, alignof(MergedEntry)));
     if (!merged) {
-        odir->merged = nullptr;
-        odir->merged_count = 0;
-        odir->cached = true;
+        ovn->merged = nullptr;
+        ovn->merged_count = 0;
+        ovn->cached = true;
         return;
     }
 
     size_t merged_count = 0;
 
-    for (size_t li = 0; li < odir->layer_count; ++li) {
-        auto* lroot = odir->layers[li].root;
+    for (size_t li = 0; li < g_layer_count; ++li) {
+        auto* lroot = ovn->layer_roots[li];
+        if (!lroot) continue;
+        
         uint64_t offset = 0;
         Dirent d;
 
         while (lroot->ops->readdir(lroot, offset, &d, &offset) == 0) {
-            if (has_whiteout_prefix(d.name)) {
-                continue;
-            }
+            if (has_whiteout_prefix(d.name)) continue;
 
             // Check upper layers for whiteout
             bool whiteout = false;
+            char wh_name[256];
+            make_whiteout_name(d.name, wh_name, sizeof(wh_name));
+            
             for (size_t u = 0; u < li; ++u) {
-                if (!odir->layers[u].writable) continue;
-                char wh_name[256];
-                make_whiteout_name(d.name, wh_name, sizeof(wh_name));
+                if (!g_layers[u].writable || !ovn->layer_roots[u]) continue;
+                
                 Vnode* wh = nullptr;
-                if (odir->layers[u].root->ops->lookup(odir->layers[u].root, wh_name, &wh) == 0) {
+                if (ovn->layer_roots[u]->ops->lookup(ovn->layer_roots[u], wh_name, &wh) == 0) {
                     whiteout = true;
+                    vnode_unref(wh);
                     break;
                 }
             }
@@ -145,185 +153,21 @@ void build_merged_list(OverlayDir* odir) {
         }
     }
 
-    odir->merged = merged;
-    odir->merged_count = merged_count;
-    odir->cached = true;
+    ovn->merged = merged;
+    ovn->merged_count = merged_count;
+    ovn->cached = true;
 }
 
-int overlay_lookup(Vnode* dir, const char* name, Vnode** result) {
-    auto* odir = static_cast<OverlayDir*>(dir->private_data);
-
-    for (size_t i = 0; i < odir->layer_count; ++i) {
-        auto* lroot = odir->layers[i].root;
-
-        // Check whiteout in writable layers above this one
-        char wh_name[256];
-        make_whiteout_name(name, wh_name, sizeof(wh_name));
-        for (size_t u = 0; u <= i; ++u) {
-            if (!odir->layers[u].writable) continue;
-            // Check upper layer for whiteout of this name
-            Vnode* wh = nullptr;
-            if (u < i) {
-                if (odir->layers[u].root->ops->lookup(odir->layers[u].root, wh_name, &wh) == 0) {
-                    return E_NOT_FOUND;
-                }
-            }
-        }
-
-        // Check whiteout on current layer
-        if (i == 0) {
-            Vnode* wh = nullptr;
-            if (odir->layers[i].writable && odir->layers[i].root->ops->lookup(odir->layers[i].root, wh_name, &wh) == 0) {
-                return E_NOT_FOUND;
-            }
-        }
-
-        Vnode* real = nullptr;
-        int err = lroot->ops->lookup(lroot, name, &real);
-        if (err == 0) {
-            auto* on = static_cast<OverlayNode*>(tori::memory::kalloc(sizeof(OverlayNode), alignof(OverlayNode)));
-            if (!on) return E_NO_SPACE;
-            on->real_node = real;
-            on->overlay_parent = dir;
-
-            Vnode* vn = alloc_vnode(real->type, on);
-            if (!vn) {
-                tori::memory::kfree(on, sizeof(OverlayNode));
-                return E_NO_SPACE;
-            }
-            vn->ops = dir->ops;
-
-            *result = vn;
-            return 0;
-        }
-    }
-
-    return E_NOT_FOUND;
-}
-
-int overlay_create(Vnode* dir, const char* name, Vnode** result) {
-    auto* odir = static_cast<OverlayDir*>(dir->private_data);
-
-    for (size_t i = 0; i < odir->layer_count; ++i) {
-        if (!odir->layers[i].writable) continue;
-
-        Vnode* real = nullptr;
-        int err = odir->layers[i].root->ops->create(odir->layers[i].root, name, &real);
-        if (err < 0) return err;
-
-        auto* on = static_cast<OverlayNode*>(tori::memory::kalloc(sizeof(OverlayNode), alignof(OverlayNode)));
-        if (!on) return E_NO_SPACE;
-        on->real_node = real;
-        on->overlay_parent = dir;
-
-        Vnode* vn = alloc_vnode(real->type, on);
-        if (!vn) {
-            tori::memory::kfree(on, sizeof(OverlayNode));
-            return E_NO_SPACE;
-        }
-        vn->ops = dir->ops;
-
-        *result = vn;
-        return 0;
-    }
-
-    return E_IO;
-}
-
-int overlay_mkdir(Vnode* dir, const char* name) {
-    auto* odir = static_cast<OverlayDir*>(dir->private_data);
-
-    for (size_t i = 0; i < odir->layer_count; ++i) {
-        if (!odir->layers[i].writable) continue;
-        return odir->layers[i].root->ops->mkdir(odir->layers[i].root, name);
-    }
-
-    return E_IO;
-}
-
-int overlay_rmdir(Vnode* dir, const char* name) {
-    auto* odir = static_cast<OverlayDir*>(dir->private_data);
-
-    for (size_t i = 0; i < odir->layer_count; ++i) {
-        if (!odir->layers[i].writable) continue;
-
-        // Only rmdir from writable layer if it exists there
-        Vnode* real = nullptr;
-        if (odir->layers[i].root->ops->lookup(odir->layers[i].root, name, &real) == 0) {
-            return odir->layers[i].root->ops->rmdir(odir->layers[i].root, name);
-        }
-        break; // only check top writable layer
-    }
-
-    return E_NOT_FOUND;
-}
-
-int overlay_unlink(Vnode* dir, const char* name) {
-    auto* odir = static_cast<OverlayDir*>(dir->private_data);
-
-    for (size_t i = 0; i < odir->layer_count; ++i) {
-        Vnode* real = nullptr;
-        if (odir->layers[i].root->ops->lookup(odir->layers[i].root, name, &real) != 0) continue;
-
-        if (odir->layers[i].writable) {
-            return odir->layers[i].root->ops->unlink(odir->layers[i].root, name);
-        }
-
-        // File is on a read-only layer; create whiteout on top writable layer
-        for (size_t j = 0; j < i; ++j) {
-            if (!odir->layers[j].writable) continue;
-
-            char wh_name[256];
-            make_whiteout_name(name, wh_name, sizeof(wh_name));
-
-            // Check if whiteout already exists
-            Vnode* wh = nullptr;
-            if (odir->layers[j].root->ops->lookup(odir->layers[j].root, wh_name, &wh) == 0) {
-                return E_EXISTS;
-            }
-
-            Vnode* wh_vnode = nullptr;
-            return odir->layers[j].root->ops->create(odir->layers[j].root, wh_name, &wh_vnode);
-        }
-
-        return E_IO;
-    }
-
-    return E_NOT_FOUND;
-}
-
-int overlay_read(Vnode* node, uint64_t offset, void* buf, size_t size, size_t* out_read) {
-    auto* on = static_cast<OverlayNode*>(node->private_data);
-    if (!on->real_node->ops->read) return E_INVALID;
-    return on->real_node->ops->read(on->real_node, offset, buf, size, out_read);
-}
-
-int overlay_write(Vnode* node, uint64_t offset, const void* buf, size_t size, size_t* out_written) {
-    auto* on = static_cast<OverlayNode*>(node->private_data);
-    if (!on->real_node->ops->write) return E_INVALID;
-    return on->real_node->ops->write(on->real_node, offset, buf, size, out_written);
-}
-
-int overlay_readdir(Vnode* dir, uint64_t offset, Dirent* entry, uint64_t* out_offset) {
-    auto* odir = static_cast<OverlayDir*>(dir->private_data);
-
-    if (!odir->cached) {
-        build_merged_list(odir);
-    }
-
-    if (offset >= odir->merged_count) return E_NOT_FOUND;
-
-    tori::memory::copy_string(entry->name, odir->merged[offset].name, sizeof(entry->name));
-    entry->type = odir->merged[offset].type;
-    *out_offset = offset + 1;
-    return 0;
-}
-
-int overlay_stat(Vnode* node, Stat* stat) {
-    auto* on = static_cast<OverlayNode*>(node->private_data);
-    if (!on->real_node->ops->stat) return E_INVALID;
-    return on->real_node->ops->stat(on->real_node, stat);
-}
+// Forward declarations of ops
+int overlay_lookup(Vnode* dir, const char* name, Vnode** result);
+int overlay_create(Vnode* dir, const char* name, Vnode** result);
+int overlay_mkdir(Vnode* dir, const char* name);
+int overlay_rmdir(Vnode* dir, const char* name);
+int overlay_unlink(Vnode* dir, const char* name);
+int overlay_read(Vnode* node, uint64_t offset, void* buf, size_t size, size_t* out_read);
+int overlay_write(Vnode* node, uint64_t offset, const void* buf, size_t size, size_t* out_written);
+int overlay_readdir(Vnode* dir, uint64_t offset, Dirent* entry, uint64_t* out_offset);
+int overlay_stat(Vnode* node, Stat* stat);
 
 VnodeOps overlay_vnode_ops = {
     .lookup  = overlay_lookup,
@@ -337,21 +181,246 @@ VnodeOps overlay_vnode_ops = {
     .stat    = overlay_stat,
 };
 
+int overlay_lookup(Vnode* dir, const char* name, Vnode** result) {
+    auto* parent_ovn = static_cast<OverlayVnode*>(dir->private_data);
+    
+    auto* child_ovn = alloc_overlay_vnode();
+    if (!child_ovn) return E_NO_SPACE;
+
+    bool found = false;
+    VnodeType type = VnodeType::File;
+
+    char wh_name[256];
+    make_whiteout_name(name, wh_name, sizeof(wh_name));
+
+    for (size_t i = 0; i < g_layer_count; ++i) {
+        if (!parent_ovn->layer_roots[i]) continue;
+        
+        auto* lroot = parent_ovn->layer_roots[i];
+
+        // Check whiteout in writable layers above this one
+        bool whiteout = false;
+        for (size_t u = 0; u < i; ++u) {
+            if (!g_layers[u].writable || !parent_ovn->layer_roots[u]) continue;
+            
+            Vnode* wh = nullptr;
+            if (parent_ovn->layer_roots[u]->ops->lookup(parent_ovn->layer_roots[u], wh_name, &wh) == 0) {
+                whiteout = true;
+                vnode_unref(wh);
+                break;
+            }
+        }
+        if (whiteout) break; // Whiteout shadows everything below
+
+        Vnode* real = nullptr;
+        if (lroot->ops->lookup(lroot, name, &real) == 0) {
+            if (!found) {
+                type = real->type;
+                found = true;
+            }
+            
+            // If we already found a file, we stop here (files don't merge)
+            // But if we found a directory, we continue to find other directory roots for merging
+            if (type == VnodeType::File) {
+                child_ovn->layer_roots[i] = real;
+                break;
+            } else {
+                // If it's a directory, ensure subsequent layers also have directories
+                if (real->type == VnodeType::Directory) {
+                    child_ovn->layer_roots[i] = real;
+                } else {
+                    // Mismatched type? Shadowing file over directory or vice versa
+                    // In a simple overlay, the topmost type wins.
+                    vnode_unref(real);
+                    break; 
+                }
+            }
+        }
+    }
+
+    if (!found) {
+        tori::memory::kfree(child_ovn, sizeof(OverlayVnode));
+        return E_NOT_FOUND;
+    }
+
+    Vnode* vn = alloc_vnode(type, child_ovn);
+    if (!vn) {
+        // Should unref all collected layer_roots
+        for (size_t i = 0; i < g_layer_count; ++i) {
+            if (child_ovn->layer_roots[i]) vnode_unref(child_ovn->layer_roots[i]);
+        }
+        tori::memory::kfree(child_ovn, sizeof(OverlayVnode));
+        return E_NO_SPACE;
+    }
+    vn->ops = &overlay_vnode_ops;
+    *result = vn;
+    return 0;
+}
+
+int overlay_create(Vnode* dir, const char* name, Vnode** result) {
+    auto* ovn = static_cast<OverlayVnode*>(dir->private_data);
+
+    for (size_t i = 0; i < g_layer_count; ++i) {
+        if (!g_layers[i].writable || !ovn->layer_roots[i]) continue;
+
+        Vnode* real = nullptr;
+        int err = ovn->layer_roots[i]->ops->create(ovn->layer_roots[i], name, &real);
+        if (err < 0) return err;
+
+        auto* child_ovn = alloc_overlay_vnode();
+        if (!child_ovn) {
+            vnode_unref(real);
+            return E_NO_SPACE;
+        }
+        child_ovn->layer_roots[i] = real;
+
+        Vnode* vn = alloc_vnode(real->type, child_ovn);
+        if (!vn) {
+            vnode_unref(real);
+            tori::memory::kfree(child_ovn, sizeof(OverlayVnode));
+            return E_NO_SPACE;
+        }
+        vn->ops = &overlay_vnode_ops;
+
+        *result = vn;
+        return 0;
+    }
+
+    return E_IO;
+}
+
+int overlay_mkdir(Vnode* dir, const char* name) {
+    auto* ovn = static_cast<OverlayVnode*>(dir->private_data);
+
+    for (size_t i = 0; i < g_layer_count; ++i) {
+        if (!g_layers[i].writable || !ovn->layer_roots[i]) continue;
+        return ovn->layer_roots[i]->ops->mkdir(ovn->layer_roots[i], name);
+    }
+
+    return E_IO;
+}
+
+int overlay_rmdir(Vnode* dir, const char* name) {
+    auto* ovn = static_cast<OverlayVnode*>(dir->private_data);
+
+    for (size_t i = 0; i < g_layer_count; ++i) {
+        if (!g_layers[i].writable || !ovn->layer_roots[i]) continue;
+
+        Vnode* real = nullptr;
+        if (ovn->layer_roots[i]->ops->lookup(ovn->layer_roots[i], name, &real) == 0) {
+            vnode_unref(real);
+            return ovn->layer_roots[i]->ops->rmdir(ovn->layer_roots[i], name);
+        }
+        break; // only check top writable layer
+    }
+
+    return E_NOT_FOUND;
+}
+
+int overlay_unlink(Vnode* dir, const char* name) {
+    auto* ovn = static_cast<OverlayVnode*>(dir->private_data);
+
+    for (size_t i = 0; i < g_layer_count; ++i) {
+        if (!ovn->layer_roots[i]) continue;
+        
+        Vnode* real = nullptr;
+        if (ovn->layer_roots[i]->ops->lookup(ovn->layer_roots[i], name, &real) != 0) continue;
+
+        if (g_layers[i].writable) {
+            vnode_unref(real);
+            return ovn->layer_roots[i]->ops->unlink(ovn->layer_roots[i], name);
+        }
+
+        // File is on a read-only layer; create whiteout on top writable layer
+        vnode_unref(real);
+        for (size_t j = 0; j < i; ++j) {
+            if (!g_layers[j].writable || !ovn->layer_roots[j]) continue;
+
+            char wh_name[256];
+            make_whiteout_name(name, wh_name, sizeof(wh_name));
+
+            Vnode* wh = nullptr;
+            if (ovn->layer_roots[j]->ops->lookup(ovn->layer_roots[j], wh_name, &wh) == 0) {
+                vnode_unref(wh);
+                return E_EXISTS;
+            }
+
+            Vnode* wh_vnode = nullptr;
+            return ovn->layer_roots[j]->ops->create(ovn->layer_roots[j], wh_name, &wh_vnode);
+        }
+
+        return E_IO;
+    }
+
+    return E_NOT_FOUND;
+}
+
+int overlay_read(Vnode* node, uint64_t offset, void* buf, size_t size, size_t* out_read) {
+    auto* ovn = static_cast<OverlayVnode*>(node->private_data);
+    for (size_t i = 0; i < g_layer_count; ++i) {
+        if (ovn->layer_roots[i]) {
+            auto* real = ovn->layer_roots[i];
+            if (!real->ops->read) return E_INVALID;
+            return real->ops->read(real, offset, buf, size, out_read);
+        }
+    }
+    return E_INVALID;
+}
+
+int overlay_write(Vnode* node, uint64_t offset, const void* buf, size_t size, size_t* out_written) {
+    auto* ovn = static_cast<OverlayVnode*>(node->private_data);
+    for (size_t i = 0; i < g_layer_count; ++i) {
+        if (ovn->layer_roots[i]) {
+            auto* real = ovn->layer_roots[i];
+            if (!real->ops->write) return E_INVALID;
+            return real->ops->write(real, offset, buf, size, out_written);
+        }
+    }
+    return E_INVALID;
+}
+
+int overlay_readdir(Vnode* dir, uint64_t offset, Dirent* entry, uint64_t* out_offset) {
+    auto* ovn = static_cast<OverlayVnode*>(dir->private_data);
+
+    if (!ovn->cached) {
+        build_merged_list(ovn);
+    }
+
+    if (offset >= ovn->merged_count) return E_NOT_FOUND;
+
+    tori::memory::copy_string(entry->name, ovn->merged[offset].name, sizeof(entry->name));
+    entry->type = ovn->merged[offset].type;
+    *out_offset = offset + 1;
+    return 0;
+}
+
+int overlay_stat(Vnode* node, Stat* stat) {
+    auto* ovn = static_cast<OverlayVnode*>(node->private_data);
+    for (size_t i = 0; i < g_layer_count; ++i) {
+        if (ovn->layer_roots[i]) {
+            auto* real = ovn->layer_roots[i];
+            if (!real->ops->stat) return E_INVALID;
+            return real->ops->stat(real, stat);
+        }
+    }
+    return E_INVALID;
+}
+
 int overlay_mount(Vnode** out_root) {
     if (!g_initialized || g_layer_count == 0) return E_INVALID;
 
-    auto* odir = static_cast<OverlayDir*>(tori::memory::kalloc(sizeof(OverlayDir), alignof(OverlayDir)));
-    if (!odir) return E_NO_SPACE;
+    auto* ovn = alloc_overlay_vnode();
+    if (!ovn) return E_NO_SPACE;
 
-    odir->layers = g_layers;
-    odir->layer_count = g_layer_count;
-    odir->merged = nullptr;
-    odir->merged_count = 0;
-    odir->cached = false;
+    for (size_t i = 0; i < g_layer_count; ++i) {
+        ovn->layer_roots[i] = g_layers[i].root;
+        vnode_ref(ovn->layer_roots[i]);
+    }
 
-    Vnode* root = alloc_vnode(VnodeType::Directory, odir);
+    Vnode* root = alloc_vnode(VnodeType::Directory, ovn);
     if (!root) {
-        tori::memory::kfree(odir, sizeof(OverlayDir));
+        for (size_t i = 0; i < g_layer_count; ++i) vnode_unref(ovn->layer_roots[i]);
+        tori::memory::kfree(ovn, sizeof(OverlayVnode));
         return E_NO_SPACE;
     }
     root->ops = &overlay_vnode_ops;
@@ -362,21 +431,17 @@ int overlay_mount(Vnode** out_root) {
 }
 
 int overlay_unmount(Vnode* root) {
-    bool found = false;
-    for (size_t i = 0; i < g_layer_count && !found; ++i) {
-        if (g_layers[i].root == root) found = true;
-    }
-    if (!found) {
-        // Free overlay dir data
-        auto* odir = static_cast<OverlayDir*>(root->private_data);
-        if (odir) {
-            if (odir->merged) {
-                tori::memory::kfree(odir->merged, odir->merged_count * sizeof(MergedEntry));
-            }
-            tori::memory::kfree(odir, sizeof(OverlayDir));
+    auto* ovn = static_cast<OverlayVnode*>(root->private_data);
+    if (ovn) {
+        if (ovn->merged) {
+            tori::memory::kfree(ovn->merged, ovn->merged_count * sizeof(MergedEntry));
         }
-        tori::memory::kfree(root, sizeof(Vnode));
+        for (size_t i = 0; i < g_layer_count; ++i) {
+            if (ovn->layer_roots[i]) vnode_unref(ovn->layer_roots[i]);
+        }
+        tori::memory::kfree(ovn, sizeof(OverlayVnode));
     }
+    tori::memory::kfree(root, sizeof(Vnode));
     return 0;
 }
 

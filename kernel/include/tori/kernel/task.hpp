@@ -49,6 +49,9 @@ struct Task {
 
     Task* ready_next;
     Task* ready_prev;
+
+    void* thread;       // back-link to owning Thread (null for kernel tasks)
+    uint64_t cr3;       // PML4 physical address to load on context switch
 };
 
 void init_task_system(uint32_t bsp_lapic_id);
@@ -66,7 +69,12 @@ void wake(Task* task);
 
 [[noreturn]] void start_scheduler();
 
-extern "C" void context_switch(CpuContext** prev, CpuContext* next);
+extern "C" void context_switch(CpuContext** prev, CpuContext* next, uint64_t next_cr3);
 extern "C" void task_trampoline();
+
+// Enqueue a pre-configured task into the scheduler's ready queue and task list.
+// The task must have its stack and context already set up.
+// Used for user threads created via thread_create.
+void sched_enqueue(Task* task);
 
 } // namespace tori::sched

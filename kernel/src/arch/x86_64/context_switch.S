@@ -1,6 +1,8 @@
 .intel_syntax noprefix
 .section .text
 
+// context_switch(CpuContext** prev, CpuContext* next, uint64_t next_cr3)
+// rdi = prev, rsi = next, rdx = next_cr3
 .global context_switch
 .type context_switch, @function
 context_switch:
@@ -14,6 +16,8 @@ context_switch:
     mov [rdi], rsp
 
     mov rsp, rsi
+
+    mov cr3, rdx
 
     pop rbx
     pop rbp

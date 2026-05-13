@@ -74,7 +74,9 @@ Once implementation starts, changes should keep these checks in mind:
 
 - Configure and build with CMake using Clang and LLD.
 - Boot under QEMU with OVMF through Limine.
-- Use `scripts/run-qemu.sh` to build the ISO and boot it under QEMU.
+- Use `scripts/run-qemu.sh -noreboot` to build the ISO and boot it under QEMU.
+- The `run-qemu` script will also route serial output from COM1 to stdout.
+- Always run the `scripts/run-qemu.sh` script with timeout to ensure non blocking.
 - Capture and read serial logs from `stdio` for deterministic test output and debugging.
 - Confirm framebuffer output appears when a framebuffer is provided.
 - Confirm serial-only diagnostics still work when framebuffer initialization fails.

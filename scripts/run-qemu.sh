@@ -34,7 +34,7 @@ cmake -E copy_if_different "$ovmf_vars_template" "$ovmf_vars"
 
 exec qemu-system-x86_64 \
     -machine q35 \
-    -m "${TORI_QEMU_MEMORY:-512M}" \
+    -m "${TORI_QEMU_MEMORY:-2G}" \
     -smp "${TORI_QEMU_CPUS:-4}" \
     -serial stdio \
     -drive "if=pflash,format=raw,readonly=on,file=$ovmf_code" \

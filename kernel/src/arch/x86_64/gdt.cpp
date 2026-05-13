@@ -8,8 +8,7 @@ namespace {
 
 using namespace tori::arch::x86_64;
 
-// GDT entry (8 bytes)
-struct [[gnu::packed]] GDTEntry {
+struct GDTEntry {
     uint16_t limit_low;
     uint16_t base_low;
     uint8_t  base_mid;
@@ -18,26 +17,24 @@ struct [[gnu::packed]] GDTEntry {
     uint8_t  base_high;
 };
 
-// High 8 bytes of a system segment descriptor (TSS on x86_64)
-struct [[gnu::packed]] GDTEntryHigh {
+struct GDTEntryHigh {
     uint32_t base_upper;
     uint32_t reserved;
 };
 
-// GDTR descriptor for lgdt
-struct [[gnu::packed]] GDTR {
+struct GDTR {
     uint16_t limit;
     uint64_t base;
-};
+} __attribute__((packed));
 
-// Per-CPU data
 struct PerCPU {
+    uint64_t syscall_rsp;    // offset 0: kernel stack for syscall entry
+    uint64_t user_rsp_save;  // offset 8: user RSP saved on syscall entry
     TSS tss;
     uint8_t stack[CONFIG_KERNEL_STACK_SIZE];
     uint8_t df_stack[CONFIG_DOUBLE_FAULT_STACK_SIZE];
 };
 
-// GDT entries + per-CPU data, all statically allocated
 alignas(16) GDTEntry gdt[gdt_total_entries] = {};
 PerCPU percpu[CONFIG_MAX_CPUS] = {};
 
@@ -53,15 +50,13 @@ GDTEntry make_gdt_entry(uint32_t base, uint32_t limit, uint8_t access, uint8_t f
 }
 
 void write_tss_descriptor(size_t gdt_index, uint64_t tss_base) {
-    // First 8 bytes
     gdt[gdt_index].limit_low = sizeof(TSS) - 1;
     gdt[gdt_index].base_low = tss_base & 0xFFFF;
     gdt[gdt_index].base_mid = (tss_base >> 16) & 0xFF;
-    gdt[gdt_index].access = 0x89;  // present, DPL=0, TSS64-available
+    gdt[gdt_index].access = 0x89;
     gdt[gdt_index].flags_limit_high = 0x00;
     gdt[gdt_index].base_high = (tss_base >> 24) & 0xFF;
 
-    // Next 8 bytes (high part of descriptor)
     auto& high = reinterpret_cast<GDTEntryHigh&>(gdt[gdt_index + 1]);
     high.base_upper = static_cast<uint32_t>(tss_base >> 32);
     high.reserved = 0;
@@ -71,20 +66,28 @@ void init_tss(size_t cpu_index) {
     PerCPU& cpu = percpu[cpu_index];
     TSS& tss = cpu.tss;
 
-    // Clear TSS
     for (size_t i = 0; i < sizeof(TSS) / sizeof(uint64_t); ++i) {
         reinterpret_cast<uint64_t*>(&tss)[i] = 0;
     }
 
-    // Set RSP0 (kernel stack for ring 0 entry)
     tss.rsp[0] = reinterpret_cast<uint64_t>(cpu.stack) + CONFIG_KERNEL_STACK_SIZE;
-
-    // Set IST1 for double faults
     tss.ist[0] = reinterpret_cast<uint64_t>(cpu.df_stack) + CONFIG_DOUBLE_FAULT_STACK_SIZE;
 
-    // Write TSS descriptor into GDT
     const size_t tss_gdt_index = GDT_TSS_FIRST + cpu_index * 2;
     write_tss_descriptor(tss_gdt_index, reinterpret_cast<uint64_t>(&tss));
+}
+
+void setup_percpu(size_t cpu_index) {
+    PerCPU& cpu = percpu[cpu_index];
+    cpu.syscall_rsp = reinterpret_cast<uint64_t>(cpu.stack) + CONFIG_KERNEL_STACK_SIZE;
+}
+
+void load_percpu_gs_base(size_t cpu_index) {
+    uint64_t base = reinterpret_cast<uint64_t>(&percpu[cpu_index]);
+    uint32_t lo = static_cast<uint32_t>(base);
+    uint32_t hi = static_cast<uint32_t>(base >> 32);
+    // Write MSR_KERNEL_GS_BASE (0xC0000102) so swapgs gives us per-CPU data.
+    asm volatile("wrmsr" : : "a"(lo), "d"(hi), "c"(0xC0000102) : "memory");
 }
 
 } // namespace
@@ -92,36 +95,25 @@ void init_tss(size_t cpu_index) {
 namespace tori::arch::x86_64 {
 
 void init_gdt() {
-    // 1. Initialize global GDT (only once on BSP)
     static bool initialized = false;
     if (!initialized) {
-        // Clear entire GDT
         for (size_t i = 0; i < gdt_total_entries; ++i) {
             reinterpret_cast<uint64_t*>(gdt)[i] = 0;
         }
 
-        // Null descriptor at index 0 (already zero)
-
-        // Kernel code: ring 0, 64-bit
         gdt[GDT_KERNEL_CODE] = make_gdt_entry(0, 0, 0x9A, 0x2);
-
-        // Kernel data: ring 0
         gdt[GDT_KERNEL_DATA] = make_gdt_entry(0, 0, 0x92, 0x0);
-
-        // User code: ring 3, 64-bit
+        gdt[GDT_USER_DATA_32] = make_gdt_entry(0, 0, 0xF2, 0x0); // Dummy for SYSRET base
+        gdt[GDT_USER_DATA] = make_gdt_entry(0, 0, 0xF2, 0x0);
         gdt[GDT_USER_CODE] = make_gdt_entry(0, 0, 0xFA, 0x2);
 
-        // User data: ring 3
-        gdt[GDT_USER_DATA] = make_gdt_entry(0, 0, 0xF2, 0x0);
-
-        // Initialize per-CPU TSS blocks
         for (size_t cpu = 0; cpu < CONFIG_MAX_CPUS; ++cpu) {
+            setup_percpu(cpu);
             init_tss(cpu);
         }
         initialized = true;
     }
 
-    // 2. Load GDT and update segment registers
     GDTR gdtr = {};
     gdtr.limit = static_cast<uint16_t>(gdt_total_entries * sizeof(GDTEntry) - 1);
     gdtr.base = reinterpret_cast<uint64_t>(gdt);
@@ -144,12 +136,6 @@ void init_gdt() {
           "r"(static_cast<uint16_t>(gdt_selector(GDT_KERNEL_DATA)))
         : "rax", "memory"
     );
-
-    // 3. Load TSS for THIS CPU. We need to know which CPU we are.
-    // For now, let's use the LAPIC ID to find the index, or pass it in.
-    // Actually, init_gdt() is called with no arguments.
-    // We can use the LAPIC ID if we've already initialized the LAPIC.
-    // But GDT is usually initialized BEFORE LAPIC.
 }
 
 void load_tss(size_t cpu_index) {
@@ -158,6 +144,8 @@ void load_tss(size_t cpu_index) {
     const size_t tss_gdt_idx = GDT_TSS_FIRST + cpu_index * 2;
     const uint16_t tss_selector = static_cast<uint16_t>(tss_gdt_idx * 8);
     asm volatile("ltr %0" : : "r"(tss_selector) : "memory");
+
+    load_percpu_gs_base(cpu_index);
 
     TORI_LOG_INFO("gdt", "GDT and TSS loaded for CPU");
     TORI_LOG_VALUE(log::Level::Info, "gdt", "cpu index", cpu_index);
