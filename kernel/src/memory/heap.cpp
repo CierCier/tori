@@ -11,7 +11,7 @@ namespace {
 constexpr uint64_t allocated_flag = 1;
 constexpr uint64_t size_mask = ~allocated_flag;
 constexpr size_t min_block_size = 32;
-constexpr size_t grow_page_count = 4;
+constexpr size_t grow_page_count = 16;
 constexpr size_t max_regions = 16;
 
 struct BlockHeader {

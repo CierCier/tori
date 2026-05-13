@@ -45,17 +45,26 @@ add_custom_command(
 
 add_custom_target(tori_limine DEPENDS ${TORI_LIMINE_STAMP})
 
+set(TORI_ROOTFS_FAT ${CMAKE_BINARY_DIR}/rootfs.fat)
+set(TORI_ROOTFS_SRC ${PROJECT_SOURCE_DIR}/iso/rootfs)
+
+add_custom_command(
+    OUTPUT ${TORI_ROOTFS_FAT}
+    COMMAND sh ${PROJECT_SOURCE_DIR}/scripts/mkrootfs.sh ${TORI_ROOTFS_FAT} ${TORI_ROOTFS_SRC}
+    COMMENT "Creating rootfs FAT image"
+)
+
 add_custom_target(tori_iso_root
     COMMAND ${CMAKE_COMMAND} -E rm -rf ${TORI_ISO_ROOT}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${TORI_ISO_ROOT}
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${PROJECT_SOURCE_DIR}/iso ${TORI_ISO_ROOT}
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${TORI_ISO_ROOT}/boot
     COMMAND ${CMAKE_COMMAND} -E copy ${KERNEL_MAKE_ELF} ${TORI_ISO_ROOT}/boot/kernel.elf
+    COMMAND ${CMAKE_COMMAND} -E copy ${TORI_ROOTFS_FAT} ${TORI_ISO_ROOT}/boot/rootfs.fat
     COMMAND ${CMAKE_COMMAND} -E make_directory ${TORI_ISO_ROOT}/EFI/BOOT
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${TORI_LIMINE_INSTALL_DIR}/share/limine/BOOTX64.EFI ${TORI_ISO_ROOT}/EFI/BOOT/BOOTX64.EFI
     COMMAND ${CMAKE_COMMAND} -E make_directory ${TORI_ISO_ROOT}/boot/limine
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${TORI_LIMINE_INSTALL_DIR}/share/limine/limine-uefi-cd.bin ${TORI_ISO_ROOT}/boot/limine/limine-uefi-cd.bin
-    DEPENDS tori_kernel
+    DEPENDS tori_kernel ${TORI_ROOTFS_FAT}
     COMMENT "Staging ISO root at ${TORI_ISO_ROOT}"
     VERBATIM
 )
@@ -86,10 +95,11 @@ add_custom_target(tori_uefi_disk
     COMMAND ${CMAKE_COMMAND} -E rm -f ${TORI_UEFI_DISK}
     COMMAND qemu-img create -f raw ${TORI_UEFI_DISK} 64M
     COMMAND mformat -i ${TORI_UEFI_DISK} -F ::
-    COMMAND mmd -i ${TORI_UEFI_DISK} ::/EFI ::/EFI/BOOT ::/boot ::/boot/limine ::/rootfs
+    COMMAND mmd -i ${TORI_UEFI_DISK} ::/EFI ::/EFI/BOOT ::/boot ::/boot/limine
     COMMAND mcopy -i ${TORI_UEFI_DISK} ${TORI_ISO_ROOT}/EFI/BOOT/BOOTX64.EFI ::/EFI/BOOT/BOOTX64.EFI
     COMMAND mcopy -i ${TORI_UEFI_DISK} ${TORI_ISO_ROOT}/boot/kernel.elf ::/boot/kernel.elf
     COMMAND mcopy -i ${TORI_UEFI_DISK} ${TORI_ISO_ROOT}/boot/limine.conf ::/boot/limine.conf
+    COMMAND mcopy -i ${TORI_UEFI_DISK} ${TORI_ISO_ROOT}/boot/rootfs.fat ::/boot/rootfs.fat
     COMMAND mcopy -i ${TORI_UEFI_DISK} ${TORI_ISO_ROOT}/boot/limine/limine-uefi-cd.bin ::/boot/limine/limine-uefi-cd.bin
     DEPENDS tori_iso_root
     COMMENT "Creating FAT UEFI disk image at ${TORI_UEFI_DISK}"

@@ -77,6 +77,7 @@ int set_root(Vnode* new_root);
 
 int resolve(Vnode* base, const char* path, Vnode** result);
 
+int mkdir(Vnode* base, const char* path);
 int open(Vnode* base, const char* path, uint32_t flags, int* out_fd);
 int close(int fd);
 int read(int fd, void* buf, size_t size, size_t* out_read);

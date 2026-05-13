@@ -11,6 +11,7 @@
 #include <tori/kernel/memory_map.hpp>
 #include <tori/kernel/pmm.hpp>
 #include <tori/kernel/slice_allocator.hpp>
+#include <tori/kernel/string.hpp>
 #include <tori/kernel/task.hpp>
 #include <tori/kernel/time.hpp>
 #include <tori/kernel/timer.hpp>
@@ -19,6 +20,8 @@
 #include <tori/kernel/fs/overlayfs.hpp>
 #include <tori/kernel/vmem_layout.hpp>
 #include <tori/kernel/vmm.hpp>
+#include <tori/kernel/block/memblock.hpp>
+#include <tori/kernel/fs/fat.hpp>
 
 #include "../arch/x86_64/halt.hpp"
 
@@ -147,6 +150,53 @@ void ap_main(void* arg) {
     }
 }
 
+int populate_ramfs_from_fat(tori::vfs::Vnode* fat_dir, tori::vfs::Vnode* ramfs_dir) {
+    uint64_t offset = 0;
+    tori::vfs::Dirent entry;
+
+    while (fat_dir->ops->readdir(fat_dir, offset, &entry, &offset) == 0) {
+        if (entry.name[0] == '\0') continue;
+
+        tori::vfs::Vnode* fat_child = nullptr;
+        int err = fat_dir->ops->lookup(fat_dir, entry.name, &fat_child);
+        if (err < 0) continue;
+
+        if (entry.type == tori::vfs::VnodeType::Directory) {
+            tori::vfs::mkdir(ramfs_dir, entry.name);
+
+            tori::vfs::Vnode* ramfs_child = nullptr;
+            ramfs_dir->ops->lookup(ramfs_dir, entry.name, &ramfs_child);
+            if (ramfs_child) {
+                populate_ramfs_from_fat(fat_child, ramfs_child);
+                tori::vfs::vnode_unref(ramfs_child);
+            }
+        } else {
+            int fd;
+            err = tori::vfs::open(ramfs_dir, entry.name,
+                                  tori::vfs::O_CREAT | tori::vfs::O_WRONLY, &fd);
+            if (err == 0) {
+                uint64_t file_off = 0;
+                size_t got = 0;
+                do {
+                    char buf[4096];
+                    got = 0;
+                    err = fat_child->ops->read(fat_child, file_off, buf, sizeof(buf), &got);
+                    if (err == 0 && got > 0) {
+                        size_t written = 0;
+                        tori::vfs::write(fd, buf, got, &written);
+                        file_off += got;
+                    }
+                } while (got > 0);
+                tori::vfs::close(fd);
+            }
+        }
+
+        tori::vfs::vnode_unref(fat_child);
+    }
+
+    return 0;
+}
+
 } // namespace
 
 namespace tori {
@@ -246,29 +296,43 @@ void kernel_main_task(void*);
             const char* modpath = mod.path;
             while (*modpath == '/') ++modpath;
 
-            const char* filename = modpath;
+            const char* fname = modpath;
             for (const char* s = modpath; *s; ++s) {
-                if (*s == '/') filename = s + 1;
+                if (*s == '/') fname = s + 1;
             }
 
-            auto* src = reinterpret_cast<const uint8_t*>(mod.address);
-
-            int fd = 0;
-            err = tori::vfs::open(lower_root, filename, tori::vfs::O_CREAT | tori::vfs::O_WRONLY, &fd);
-            if (err < 0) {
-                TORI_LOG_WARN("vfs", "failed to create module file");
+            if (!tori::memory::string_equals(fname, "rootfs.fat")) {
+                TORI_LOG_WARN("vfs", "unexpected module, skipping");
                 continue;
             }
 
-            size_t written = 0;
-            err = tori::vfs::write(fd, src, static_cast<size_t>(mod.size), &written);
-            if (err < 0) {
-                TORI_LOG_WARN("vfs", "failed to write module data");
+            auto* membdev = tori::block::memblock_create(
+                reinterpret_cast<const void*>(mod.address), static_cast<size_t>(mod.size));
+            if (!membdev) {
+                TORI_LOG_WARN("vfs", "failed to create memblock device");
+                continue;
             }
-            tori::vfs::close(fd);
 
-            TORI_LOG_VALUE(tori::log::Level::Info, "vfs", "loaded module",
-                          static_cast<uint64_t>(mod.size));
+            err = tori::fat::init(membdev);
+            if (err < 0) {
+                TORI_LOG_WARN("vfs", "failed to init FAT filesystem");
+                continue;
+            }
+
+            tori::vfs::Vnode* fat_root = nullptr;
+            err = tori::fat::fs_ops.mount(&fat_root);
+            if (err < 0 || !fat_root) {
+                TORI_LOG_WARN("vfs", "failed to mount FAT");
+                continue;
+            }
+
+            err = populate_ramfs_from_fat(fat_root, lower_root);
+            if (err < 0) {
+                TORI_LOG_WARN("vfs", "FAT populate returned error");
+            }
+
+            tori::fat::fs_ops.unmount(fat_root);
+            TORI_LOG_INFO("vfs", "FAT rootfs populated into RamFS");
         }
     }
 
@@ -341,32 +405,6 @@ void kernel_main_task(void*);
 void kernel_main_task(void*) {
     TORI_LOG_INFO("kernel", "first scheduled task running");
     TORI_LOG_TEXT_VALUE(tori::log::Level::Info, "kernel", "task name", tori::sched::current_task()->name);
-
-    {
-        int fd = 0;
-        int err = tori::vfs::open(nullptr, "/hello.txt", tori::vfs::O_RDONLY, &fd);
-        if (err < 0) {
-            TORI_LOG_WARN("vfs", "could not open /hello.txt through overlay");
-        } else {
-            TORI_LOG_INFO("vfs", "opened /hello.txt through overlay");
-
-            tori::vfs::Stat st;
-            err = tori::vfs::stat(fd, &st);
-            if (err == 0) {
-                TORI_LOG_VALUE(tori::log::Level::Info, "vfs", "hello.txt size", st.size);
-            }
-
-            char buf[128];
-            size_t got = 0;
-            err = tori::vfs::read(fd, buf, sizeof(buf) - 1, &got);
-            if (err == 0) {
-                buf[got] = '\0';
-                TORI_LOG_TEXT_VALUE(tori::log::Level::Info, "vfs", "hello.txt content", buf);
-            }
-
-            tori::vfs::close(fd);
-        }
-    }
 
     TORI_LOG_INFO("kernel", "kernel-main yielding forever");
 

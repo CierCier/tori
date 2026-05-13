@@ -111,6 +111,45 @@ void init() {
     TORI_LOG_INFO("vfs", "VFS initialized");
 }
 
+int mkdir(Vnode* base, const char* path) {
+    if (!initialized || !base || !path) return E_INVALID;
+
+    Vnode* start = base;
+    if (path[0] == '/') {
+        if (root_vnode == nullptr) return E_NOT_FOUND;
+        start = root_vnode;
+        while (*path == '/') ++path;
+        if (*path == '\0') return E_INVALID;
+    }
+
+    const char* sep = nullptr;
+    for (const char* s = path; *s; ++s) {
+        if (*s == '/') sep = s;
+    }
+
+    Vnode* parent = nullptr;
+    const char* name = path;
+
+    if (sep == nullptr) {
+        parent = start;
+    } else {
+        char parent_path[256];
+        size_t plen = static_cast<size_t>(sep - path);
+        if (plen >= sizeof(parent_path)) return E_INVALID;
+        for (size_t i = 0; i < plen; ++i) parent_path[i] = path[i];
+        parent_path[plen] = '\0';
+        name = sep + 1;
+
+        int err = resolve(start, parent_path, &parent);
+        if (err < 0) return err;
+    }
+
+    if (parent->type != VnodeType::Directory) return E_NOT_DIR;
+    if (!parent->ops->mkdir) return E_INVALID;
+
+    return parent->ops->mkdir(parent, name);
+}
+
 int mount(FilesystemOps* fs_ops, Vnode* target, Vnode** out_root) {
     if (!initialized || !fs_ops) return E_INVALID;
 
