@@ -20,6 +20,8 @@ struct Stats {
 void init(const boot::BootInfo& boot_info);
 uint64_t alloc_page();
 uint64_t alloc_pages(uint64_t page_count);
+void retain_page(uint64_t physical_address);
+uint64_t page_ref_count(uint64_t physical_address);
 void free_page(uint64_t physical_address);
 void free_pages(uint64_t physical_address, uint64_t page_count);
 bool owns_page(uint64_t physical_address);

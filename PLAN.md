@@ -254,9 +254,20 @@ Status: **complete**
 
 ### Milestone 7: User Boundary
 
-- Define user/kernel address split.
-- Add syscall or message-passing entry path.
-- Add first user-mode execution experiment.
+Status: **complete**
+
+- [x] Define user/kernel address split.
+- [x] Add syscall or message-passing entry path.
+- [x] Add first user-mode execution experiment.
+- [x] Clone address space for fork with COW (vmm_clone_address_space, free_address_space).
+- [x] COW page fault handling in page fault handler.
+- [x] Fork syscall.
+- [x] Exec syscall (address space replacement).
+- [x] Spawn userspace-facing syscall dispatch.
+- [x] getpid libc wrapper.
+- [x] VFS-backed write (with serial fallback for unopened fds).
+
+### Milestone 8: TBD
 
 ## Test Plan
 

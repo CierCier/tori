@@ -86,7 +86,9 @@ void load_percpu_gs_base(size_t cpu_index) {
     uint64_t base = reinterpret_cast<uint64_t>(&percpu[cpu_index]);
     uint32_t lo = static_cast<uint32_t>(base);
     uint32_t hi = static_cast<uint32_t>(base >> 32);
-    // Write MSR_KERNEL_GS_BASE (0xC0000102) so swapgs gives us per-CPU data.
+    // Write IA32_GS_BASE (0xC0000101) so kernel can access per-CPU data immediately.
+    asm volatile("wrmsr" : : "a"(lo), "d"(hi), "c"(0xC0000101) : "memory");
+    // Write IA32_KERNEL_GS_BASE (0xC0000102) so swapgs in syscall_entry works.
     asm volatile("wrmsr" : : "a"(lo), "d"(hi), "c"(0xC0000102) : "memory");
 }
 
@@ -149,6 +151,18 @@ void load_tss(size_t cpu_index) {
 
     TORI_LOG_INFO("gdt", "GDT and TSS loaded for CPU");
     TORI_LOG_VALUE(log::Level::Info, "gdt", "cpu index", cpu_index);
+}
+
+void set_kernel_entry_stack(size_t cpu_index, uint64_t stack_top) {
+    if (cpu_index >= CONFIG_MAX_CPUS) return;
+
+    PerCPU& cpu = percpu[cpu_index];
+    if (stack_top == 0) {
+        stack_top = reinterpret_cast<uint64_t>(cpu.stack) + CONFIG_KERNEL_STACK_SIZE;
+    }
+
+    cpu.syscall_rsp = stack_top;
+    cpu.tss.rsp[0] = stack_top;
 }
 
 } // namespace tori::arch::x86_64

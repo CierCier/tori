@@ -42,4 +42,8 @@ void init_gdt();
 // Must be called after init_gdt().
 void load_tss(size_t cpu_index);
 
+// Updates the ring-0 entry stack used by SYSCALL and privilege-changing
+// interrupts on the current CPU. A zero stack_top restores the CPU's boot stack.
+void set_kernel_entry_stack(size_t cpu_index, uint64_t stack_top);
+
 } // namespace tori::arch::x86_64

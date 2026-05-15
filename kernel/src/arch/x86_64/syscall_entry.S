@@ -16,6 +16,10 @@ syscall_entry:
     mov gs:[8], rsp         // save user RSP
     mov rsp, gs:[0]         // load kernel stack
 
+    // Push user RSP and rax onto stack to complete SyscallFrame
+    push gs:[8]
+    push rax
+
     // Save callee-saved registers
     push r15
     push r14
@@ -42,15 +46,37 @@ syscall_entry:
     cld
     call handle_syscall
 
-    // Restore rcx, r11 for sysretq
+    // Update rax in the frame so fork_return pops the return value
+    mov [rsp + 112], rax
+
+    // Fall through to restore registers
+
+.global fork_return
+.type fork_return, @function
+fork_return:
+    // On entry, rsp points to SyscallFrame
+    // If called from handle_syscall, rax contains the return value.
+    // If called for the first time in a fork child, rax should be 0.
+    
     pop rcx                  // user RIP
     pop r11                  // user RFLAGS
+    pop rdi
+    pop rsi
+    pop rdx
+    pop r10
+    pop r8
+    pop r9
+    pop rbx
+    pop rbp
+    pop r12
+    pop r13
+    pop r14
+    pop r15
+    pop rax
+    pop qword ptr gs:[8]     // restore user RSP into per-CPU save area
 
-    // Skip saved args + callee-saved registers
-    add rsp, 12*8
-
-    // Restore user RSP
     mov rsp, gs:[8]
     swapgs
     sysretq
+
 .size syscall_entry, . - syscall_entry

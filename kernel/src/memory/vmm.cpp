@@ -19,7 +19,8 @@ constexpr uint64_t pte_present = 1ULL << 0;
 constexpr uint64_t pte_writable = 1ULL << 1;
 constexpr uint64_t pte_user = 1ULL << 2;
 constexpr uint64_t pte_huge = 1ULL << 7;
-constexpr uint64_t pte_addr_mask = ~0xFFFULL;
+constexpr uint64_t pte_cow = 1ULL << 9;
+constexpr uint64_t pte_addr_mask = 0x000ffffffffff000ULL;
 
 tori::sync::Spinlock vmm_lock;
 
@@ -56,7 +57,7 @@ uint64_t ensure_table(uint64_t& entry) {
 // Split a huge page entry (level 1 = 1G, level 2 = 2M) into 512 sub-entries.
 // Updates entry to point to the new intermediate table.
 void split_huge(uint64_t& entry, int level) {
-    const uint64_t base_aligned = entry & ~((1ULL << (level == 1 ? 30 : 21)) - 1);
+    const uint64_t base_aligned = (entry & pte_addr_mask) & ~((1ULL << (level == 1 ? 30 : 21)) - 1);
     const uint64_t flags = entry & (pte_present | pte_writable | pte_user | 0x18 | (1ULL << 63));
     const uint64_t sub_size = (level == 1) ? (1ULL << 21) : (1ULL << 12);
     const bool sub_is_huge = (level == 1);
@@ -267,6 +268,149 @@ uint64_t create_user_pml4() {
     }
 
     return new_pml4_phys;
+}
+
+} // namespace tori::memory::vmm
+
+namespace {
+
+// Recursively clone a page table subtree starting at src_phys.
+// depth: 0 = PT (leaf PTEs), 1 = PD, 2 = PDPT, 3 = PML4.
+// For leaf PTEs (depth == 0), writable pages are marked COW on the source.
+// Returns the physical address of the new table, or 0 on allocation failure.
+uint64_t clone_table(uint64_t src_phys, int depth) {
+    uint64_t dst_phys = tori::memory::pmm::alloc_page();
+    if (dst_phys == tori::memory::pmm::invalid_physical_address) {
+        return 0;
+    }
+
+    PageTable* src = get_table(src_phys);
+    PageTable* dst = get_table(dst_phys);
+
+    for (int i = 0; i < 512; ++i) {
+        uint64_t entry = src->entries[i];
+        if (!(entry & pte_present)) {
+            dst->entries[i] = 0;
+            continue;
+        }
+
+        if (depth == 0) {
+            tori::memory::pmm::retain_page(entry & pte_addr_mask);
+            if (entry & pte_writable) {
+                src->entries[i] = (entry & ~pte_writable) | pte_cow;
+            }
+            dst->entries[i] = src->entries[i];
+        } else {
+            if (entry & pte_huge) {
+                dst->entries[i] = entry;
+            } else {
+                uint64_t sub_phys = clone_table(entry & pte_addr_mask, depth - 1);
+                if (!sub_phys) {
+                    tori::memory::pmm::free_page(dst_phys);
+                    return 0;
+                }
+                dst->entries[i] = sub_phys | pte_present | pte_writable | pte_user;
+            }
+        }
+    }
+
+    return dst_phys;
+}
+
+// Recursively free all physical pages in a page table subtree.
+// depth: 0 = PT (leaf PTEs), 1 = PD, 2 = PDPT, 3 = PML4.
+void free_table(uint64_t phys, int depth) {
+    PageTable* table = get_table(phys);
+
+    for (int i = 0; i < 512; ++i) {
+        uint64_t entry = table->entries[i];
+        if (!(entry & pte_present)) continue;
+
+        if (depth == 0) {
+            tori::memory::pmm::free_page(entry & pte_addr_mask);
+        } else {
+            if (!(entry & pte_huge)) {
+                free_table(entry & pte_addr_mask, depth - 1);
+            }
+        }
+    }
+
+    tori::memory::pmm::free_page(phys);
+}
+
+} // namespace
+
+namespace tori::memory::vmm {
+
+using sync::LockGuard;
+using pmm::alloc_page;
+using pmm::free_page;
+using pmm::invalid_physical_address;
+
+uint64_t clone_address_space(uint64_t src_pml4_phys) {
+    LockGuard guard(vmm_lock);
+
+    if (!kernel_pml4_phys) return 0;
+
+    uint64_t dst_pml4_phys = alloc_page();
+    if (dst_pml4_phys == invalid_physical_address) {
+        return 0;
+    }
+
+    PageTable* src_pml4 = get_table(src_pml4_phys);
+    PageTable* dst_pml4 = get_table(dst_pml4_phys);
+
+    for (int i = 256; i < 512; ++i) {
+        dst_pml4->entries[i] = src_pml4->entries[i];
+    }
+
+    for (int i = 0; i < 256; ++i) {
+        uint64_t entry = src_pml4->entries[i];
+        if (!(entry & pte_present)) {
+            dst_pml4->entries[i] = 0;
+            continue;
+        }
+
+        if (entry & pte_huge) {
+            dst_pml4->entries[i] = entry;
+            continue;
+        }
+
+        uint64_t sub_phys = clone_table(entry & pte_addr_mask, 2);
+        if (!sub_phys) {
+            for (int j = 0; j < i; ++j) {
+                if (dst_pml4->entries[j] & pte_present) {
+                    free_table(dst_pml4->entries[j] & pte_addr_mask, 2);
+                }
+            }
+            free_page(dst_pml4_phys);
+            return 0;
+        }
+        dst_pml4->entries[i] = sub_phys | pte_present | pte_writable | pte_user;
+    }
+
+    flush_tlb();
+
+    return dst_pml4_phys;
+}
+
+void free_address_space(uint64_t pml4_phys) {
+    if (!pml4_phys) return;
+
+    LockGuard guard(vmm_lock);
+
+    PageTable* pml4 = get_table(pml4_phys);
+
+    for (int i = 0; i < 256; ++i) {
+        uint64_t entry = pml4->entries[i];
+        if (!(entry & pte_present)) continue;
+
+        if (!(entry & pte_huge)) {
+            free_table(entry & pte_addr_mask, 2);
+        }
+    }
+
+    free_page(pml4_phys);
 }
 
 } // namespace tori::memory::vmm

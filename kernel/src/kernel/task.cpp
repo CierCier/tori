@@ -2,6 +2,7 @@
 
 #include <tori/kernel/address.hpp>
 #include <tori/kernel/allocator.hpp>
+#include <tori/kernel/gdt.hpp>
 #include <tori/kernel/lapic.hpp>
 #include <tori/kernel/log.hpp>
 #include <tori/kernel/pmm.hpp>
@@ -302,6 +303,10 @@ void set_current_task(Task* task) {
     const uint32_t lapic_id = tori::arch::x86_64::lapic::id();
     if (lapic_id < CONFIG_MAX_CPUS) {
         current_tasks[lapic_id] = task;
+        const uint64_t stack_top = (task && task->stack.top)
+            ? reinterpret_cast<uint64_t>(task->stack.top)
+            : 0;
+        tori::arch::x86_64::set_kernel_entry_stack(lapic_id, stack_top);
     }
 }
 

@@ -23,7 +23,23 @@ isr_common_handler:
     push r14
     push r15
 
-    mov rdi, rsp
+    // The generated ISR stubs normalize the frame by pushing:
+    //   vector, error_code
+    // before jumping here. After saving 15 GPRs, the CPU-saved CS is at
+    // rsp + 15*8 + 2*8 + 8 = rsp + 144.
+    //
+    // Kernel code expects GS_BASE to address per-CPU storage. If the
+    // interrupt came from CPL3, GS_BASE is the user value and the kernel
+    // per-CPU base is in IA32_KERNEL_GS_BASE, so swap before calling C++.
+    xor eax, eax
+    test qword ptr [rsp + 144], 3
+    jz .Lkernel_gs_active
+    swapgs
+    mov eax, 1
+.Lkernel_gs_active:
+    push rax
+
+    lea rdi, [rsp + 8]
     call handle_interrupt
 
     call sched_needs_preempt
@@ -33,6 +49,12 @@ isr_common_handler:
 .Lno_preempt:
 
     call log_flush
+
+    pop rax
+    test rax, rax
+    jz .Lskip_swapgs_back
+    swapgs
+.Lskip_swapgs_back:
 
     pop r15
     pop r14

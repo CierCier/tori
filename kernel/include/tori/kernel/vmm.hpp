@@ -13,6 +13,7 @@ enum class Flags : uint64_t {
     WriteThrough  = (1ULL << 3),
     CacheDisable  = (1ULL << 4),
     Global        = (1ULL << 8),
+    CowPending    = (1ULL << 9),
     NoExecute     = (1ULL << 63),
 };
 
@@ -60,5 +61,18 @@ void free_vmem_range(uint64_t base, uint64_t size);
 // Kernel-space entries (indices 256-511) are cloned from the kernel PML4.
 // Returns the physical address of the new PML4, or 0 on failure.
 uint64_t create_user_pml4();
+
+// Clone an entire user address space for fork.
+// Walks user entries (indices 0-255) at all 4 levels, deep-copies the page table tree,
+// and marks writable leaf PTEs as copy-on-write (W=0, CowPending=1).
+// Flushes TLB entries for COW pages on the source PML4.
+// Returns the physical address of the new PML4, or 0 on failure.
+uint64_t clone_address_space(uint64_t src_pml4_phys);
+
+// Free all physical pages in a user address space (indices 0-255).
+// Walks page tables, frees leaf physical pages and all intermediate page table pages,
+// then frees the PML4 page itself.
+// The caller must ensure no task is actively using this address space.
+void free_address_space(uint64_t pml4_phys);
 
 } // namespace tori::memory::vmm

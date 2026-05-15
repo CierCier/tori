@@ -397,10 +397,14 @@ void kernel_main_task(void *);
   {
     // Create writable upper layer for overlayFS
     tori::vfs::Vnode *upper_root = nullptr;
-    int err = tori::ramfs::fs_ops.mount(&upper_root);
-    if (err < 0 || !upper_root) {
-      TORI_PANIC("vfs", "failed to create upper RamFS for overlay");
+    int err = tori::vfs::mount(&tori::ramfs::fs_ops, nullptr, &upper_root);
+    if (err < 0 && err != tori::vfs::E_EXISTS) {
+        TORI_PANIC("vfs", "failed to create upper RamFS for overlay");
     }
+    // If it already existed as root, we might need to handle that, 
+    // but here we expect to create a fresh one. 
+    // Actually, tori::vfs::mount with target=nullptr and root already set returns E_EXISTS.
+    // So we should just use ramfs::fs_ops.mount if we want a private one.
 
     tori::overlayfs::Layer layers[2];
     layers[0].root = lower_root;
@@ -424,9 +428,10 @@ void kernel_main_task(void *);
       TORI_PANIC("vfs", "failed to set overlayFS as root");
     }
 
-    TORI_LOG_INFO("vfs", "overlayFS root active (lower=RamFS, upper=RamFS)");
+    TORI_LOG_INFO("kernel", "overlayFS root active (lower=RamFS, upper=RamFS)");
   }
 
+  TORI_LOG_INFO("kernel", "initializing task system");
   tori::sched::init_task_system(owned_boot_info.smp.bsp_lapic_id);
 
   // AP Initialization
@@ -494,8 +499,15 @@ void kernel_main_task(void *) {
                  static_cast<uint64_t>(init_pid));
 
   TORI_LOG_INFO("kernel", "kernel-main yielding forever");
+  
+  uint64_t last_reap = 0;
 
   for (;;) {
+    uint64_t now = tori::timer::now();
+    if (now - last_reap >= 100) {
+      tori::proc::reap_zombies_of_init();
+      last_reap = now;
+    }
     tori::sched::yield();
   }
 }

@@ -6,5 +6,8 @@ enum {
     E_NO_ENTRY  = 2,
     E_IO        = 5,
     E_NO_MEM    = 12,
+    E_CHILD     = 10,
+    E_INTR      = 4,
     E_INVALID   = 22,
+    E_AGAIN     = 11,
 };

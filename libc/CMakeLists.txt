@@ -30,6 +30,11 @@ set(LIBC_ASFLAGS
 set(CRT0_OBJ ${LIBC_OUT_DIR}/crt0.o)
 set(WRITE_OBJ ${LIBC_OUT_DIR}/write.o)
 set(EXIT_OBJ ${LIBC_OUT_DIR}/exit.o)
+set(FORK_OBJ ${LIBC_OUT_DIR}/fork.o)
+set(EXECV_OBJ ${LIBC_OUT_DIR}/execv.o)
+set(GETPID_OBJ ${LIBC_OUT_DIR}/getpid.o)
+set(GETPPID_OBJ ${LIBC_OUT_DIR}/getppid.o)
+set(WAITPID_OBJ ${LIBC_OUT_DIR}/waitpid.o)
 
 add_custom_command(
     OUTPUT ${CRT0_OBJ}
@@ -53,9 +58,44 @@ add_custom_command(
 )
 
 add_custom_command(
+    OUTPUT ${FORK_OBJ}
+    COMMAND ${LIBC_CC} ${LIBC_CFLAGS} -c ${LIBC_SRC_DIR}/src/syscall/fork.c -o ${FORK_OBJ}
+    DEPENDS ${LIBC_SRC_DIR}/src/syscall/fork.c
+    COMMENT "Building fork.o"
+)
+
+add_custom_command(
+    OUTPUT ${EXECV_OBJ}
+    COMMAND ${LIBC_CC} ${LIBC_CFLAGS} -c ${LIBC_SRC_DIR}/src/syscall/execv.c -o ${EXECV_OBJ}
+    DEPENDS ${LIBC_SRC_DIR}/src/syscall/execv.c
+    COMMENT "Building execv.o"
+)
+
+add_custom_command(
+    OUTPUT ${GETPID_OBJ}
+    COMMAND ${LIBC_CC} ${LIBC_CFLAGS} -c ${LIBC_SRC_DIR}/src/syscall/getpid.c -o ${GETPID_OBJ}
+    DEPENDS ${LIBC_SRC_DIR}/src/syscall/getpid.c
+    COMMENT "Building getpid.o"
+)
+
+add_custom_command(
+    OUTPUT ${GETPPID_OBJ}
+    COMMAND ${LIBC_CC} ${LIBC_CFLAGS} -c ${LIBC_SRC_DIR}/src/syscall/getppid.c -o ${GETPPID_OBJ}
+    DEPENDS ${LIBC_SRC_DIR}/src/syscall/getppid.c
+    COMMENT "Building getppid.o"
+)
+
+add_custom_command(
+    OUTPUT ${WAITPID_OBJ}
+    COMMAND ${LIBC_CC} ${LIBC_CFLAGS} -c ${LIBC_SRC_DIR}/src/syscall/waitpid.c -o ${WAITPID_OBJ}
+    DEPENDS ${LIBC_SRC_DIR}/src/syscall/waitpid.c
+    COMMENT "Building waitpid.o"
+)
+
+add_custom_command(
     OUTPUT ${LIBC_ARCHIVE}
-    COMMAND ${CMAKE_AR} rcs ${LIBC_ARCHIVE} ${WRITE_OBJ} ${EXIT_OBJ}
-    DEPENDS ${WRITE_OBJ} ${EXIT_OBJ}
+    COMMAND ${CMAKE_AR} rcs ${LIBC_ARCHIVE} ${WRITE_OBJ} ${EXIT_OBJ} ${FORK_OBJ} ${EXECV_OBJ} ${GETPID_OBJ} ${GETPPID_OBJ} ${WAITPID_OBJ}
+    DEPENDS ${WRITE_OBJ} ${EXIT_OBJ} ${FORK_OBJ} ${EXECV_OBJ} ${GETPID_OBJ} ${GETPPID_OBJ} ${WAITPID_OBJ}
     COMMENT "Archiving libtori_libc.a"
 )
 

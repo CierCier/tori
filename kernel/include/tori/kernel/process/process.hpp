@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <tori/kernel/task.hpp>
 #include <tori/kernel/vfs.hpp>
 
 namespace tori::proc {
@@ -21,6 +22,11 @@ struct Process {
     Process* next;
     Process* prev;
     void* thread_list;
+    Process* child_head;
+    Process* child_tail;
+    Process* child_next;
+    Process* child_prev;
+    tori::sched::Task* wait_task;
 };
 
 void init_process_system();
@@ -28,10 +34,15 @@ void init_process_system();
 uint64_t pid_alloc();
 void pid_free(uint64_t pid);
 
-Process* process_create(uintptr_t pml4_phys);
+Process* process_create(uintptr_t pml4_phys, Process* parent = nullptr);
 
-// Internal kernel spawn: create a new process by loading the ELF at path.
-// Returns the new PID on success, or a negative errno on failure.
+Process* find_process(uint64_t pid);
+Process* find_init_process();
+
+void reap_process(Process* proc);
+void reparent_children(Process* dying, Process* new_parent);
+void reap_zombies_of_init();
+
 int process_spawn(const char* path);
 
 } // namespace tori::proc

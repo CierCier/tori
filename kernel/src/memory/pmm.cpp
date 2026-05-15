@@ -12,6 +12,7 @@ namespace {
 constexpr uint64_t max_managed_pages = 1024 * 1024;
 constexpr uint64_t bitmap_words = max_managed_pages / 64;
 uint64_t page_bitmap[bitmap_words] = {};
+uint16_t page_refcounts[max_managed_pages] = {};
 
 tori::memory::pmm::Stats allocator_stats = {};
 uint64_t next_search_page = 0;
@@ -58,6 +59,7 @@ void mark_page_used(uint64_t page_index) {
     }
 
     page_bitmap[page_index / 64] |= 1ull << (page_index % 64);
+    page_refcounts[page_index] = 1;
     --allocator_stats.free_pages;
     ++allocator_stats.used_pages;
 }
@@ -68,6 +70,7 @@ void mark_page_free(uint64_t page_index) {
     }
 
     page_bitmap[page_index / 64] &= ~(1ull << (page_index % 64));
+    page_refcounts[page_index] = 0;
     ++allocator_stats.free_pages;
     --allocator_stats.used_pages;
 }
@@ -75,6 +78,10 @@ void mark_page_free(uint64_t page_index) {
 void reserve_all_pages() {
     for (uint64_t index = 0; index < bitmap_words; ++index) {
         page_bitmap[index] = UINT64_MAX;
+    }
+
+    for (uint64_t index = 0; index < max_managed_pages; ++index) {
+        page_refcounts[index] = 0;
     }
 
     allocator_stats = {};
@@ -200,6 +207,38 @@ uint64_t alloc_pages(uint64_t page_count) {
     return invalid_physical_address;
 }
 
+void retain_page(uint64_t physical_address) {
+    if ((physical_address % page_size) != 0) {
+        return;
+    }
+
+    tori::sync::LockGuard guard(pmm_lock);
+
+    const uint64_t page = physical_address / page_size;
+    if (!page_index_valid(page) || !is_page_used(page)) {
+        return;
+    }
+
+    if (page_refcounts[page] != UINT16_MAX) {
+        ++page_refcounts[page];
+    }
+}
+
+uint64_t page_ref_count(uint64_t physical_address) {
+    if ((physical_address % page_size) != 0) {
+        return 0;
+    }
+
+    tori::sync::LockGuard guard(pmm_lock);
+
+    const uint64_t page = physical_address / page_size;
+    if (!page_index_valid(page) || !is_page_used(page)) {
+        return 0;
+    }
+
+    return page_refcounts[page];
+}
+
 void free_page(uint64_t physical_address) {
     free_pages(physical_address, 1);
 }
@@ -226,6 +265,13 @@ void free_pages(uint64_t physical_address, uint64_t page_count) {
     }
 
     for (uint64_t index = page; index < end_page; ++index) {
+        if (!is_page_used(index)) {
+            continue;
+        }
+        if (page_refcounts[index] > 1) {
+            --page_refcounts[index];
+            continue;
+        }
         mark_page_free(index);
     }
 

@@ -13,12 +13,14 @@ struct SyscallFrame {
     uint64_t r10;          // arg4 (offset 40)
     uint64_t r8;           // arg5 (offset 48)
     uint64_t r9;           // arg6 (offset 56)
-    uint64_t r15;          // (offset 64)
-    uint64_t r14;          // (offset 72)
-    uint64_t r13;          // (offset 80)
-    uint64_t r12;          // (offset 88)
-    uint64_t rbp;          // (offset 96)
-    uint64_t rbx;          // (offset 104)
+    uint64_t rbx;          // (offset 64)
+    uint64_t rbp;          // (offset 72)
+    uint64_t r12;          // (offset 80)
+    uint64_t r13;          // (offset 88)
+    uint64_t r14;          // (offset 96)
+    uint64_t r15;          // (offset 104)
+    uint64_t rax;          // syscall number / return value (offset 112)
+    uint64_t user_rsp;     // (offset 120)
 };
 
 void init_syscall();

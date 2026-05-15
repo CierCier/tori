@@ -6,3 +6,5 @@
 #define SYS_exec    3
 #define SYS_spawn   4
 #define SYS_getpid  5
+#define SYS_waitpid 6
+#define SYS_getppid 7
