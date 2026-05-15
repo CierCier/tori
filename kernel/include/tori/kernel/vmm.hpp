@@ -69,6 +69,10 @@ uint64_t create_user_pml4();
 // Returns the physical address of the new PML4, or 0 on failure.
 uint64_t clone_address_space(uint64_t src_pml4_phys);
 
+// Resolve a user copy-on-write page fault for an address space.
+// Returns true when the fault was handled and execution may resume.
+bool handle_cow_fault(uint64_t fault_address, uint64_t error_code, uint64_t pml4_phys);
+
 // Free all physical pages in a user address space (indices 0-255).
 // Walks page tables, frees leaf physical pages and all intermediate page table pages,
 // then frees the PML4 page itself.

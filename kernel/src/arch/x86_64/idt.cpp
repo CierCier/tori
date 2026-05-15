@@ -1,11 +1,9 @@
 #include <tori/kernel/idt.hpp>
 
 #include <config.h>
-#include <tori/kernel/address.hpp>
 #include <tori/kernel/gdt.hpp>
 #include <tori/kernel/lapic.hpp>
 #include <tori/kernel/log.hpp>
-#include <tori/kernel/pmm.hpp>
 #include <tori/kernel/sched/sched.hpp>
 #include <tori/kernel/task.hpp>
 #include <tori/kernel/time.hpp>
@@ -20,92 +18,12 @@ namespace {
 
 using namespace tori::arch::x86_64;
 
-// Page table walk helpers for COW handling.
-struct PageTable {
-    uint64_t entries[512];
-};
-
-PageTable* get_pt(uint64_t phys) {
-    return static_cast<PageTable*>(tori::memory::address::physical_to_virtual(phys));
-}
-
-constexpr uint64_t PTE_PRESENT = 1ULL << 0;
-constexpr uint64_t PTE_WRITABLE = 1ULL << 1;
-constexpr uint64_t PTE_USER = 1ULL << 2;
-constexpr uint64_t PTE_COW = 1ULL << 9;
-constexpr uint64_t PTE_ADDR_MASK = 0x000ffffffffff000ULL;
-
-// Handle a copy-on-write page fault.
-// Returns true if the fault was resolved (COW handled), false if it should fall through to panic.
-bool handle_cow_fault(uint64_t cr2, uint64_t error_code) {
-    // COW fault: user-mode write to a present non-writable page with COW_PENDING set.
-    // error_code bits: P(0)=1, W(1)=1, U(2)=1  →  0x7
-    if ((error_code & 0x7) != 0x7) return false;
-
+uint64_t current_user_pml4() {
     auto* task = tori::sched::current_task();
-    if (!task || !task->thread) return false;
+    if (!task || !task->thread) return 0;
 
     auto* thread = static_cast<tori::proc::Thread*>(task->thread);
-    if (!thread->process) return false;
-
-    uint64_t pml4_phys = thread->process->pml4_phys;
-    if (!pml4_phys) return false;
-
-    // Walk page table to find the leaf PTE.
-    const uint64_t pml4_idx = (cr2 >> 39) & 0x1FF;
-    const uint64_t pdpt_idx = (cr2 >> 30) & 0x1FF;
-    const uint64_t pd_idx   = (cr2 >> 21) & 0x1FF;
-    const uint64_t pt_idx   = (cr2 >> 12) & 0x1FF;
-
-    PageTable* pml4 = get_pt(pml4_phys);
-    if (!(pml4->entries[pml4_idx] & PTE_PRESENT)) return false;
-
-    uint64_t pdpt_phys = pml4->entries[pml4_idx] & PTE_ADDR_MASK;
-    PageTable* pdpt = get_pt(pdpt_phys);
-    if (!(pdpt->entries[pdpt_idx] & PTE_PRESENT)) return false;
-
-    uint64_t pd_phys = pdpt->entries[pdpt_idx] & PTE_ADDR_MASK;
-    PageTable* pd = get_pt(pd_phys);
-    if (!(pd->entries[pd_idx] & PTE_PRESENT)) return false;
-
-    uint64_t pt_phys = pd->entries[pd_idx] & PTE_ADDR_MASK;
-    PageTable* pt = get_pt(pt_phys);
-
-    uint64_t pte = pt->entries[pt_idx];
-    if (!(pte & PTE_PRESENT)) return false;
-    if (!(pte & PTE_COW)) return false;
-
-    uint64_t old_page_phys = pte & PTE_ADDR_MASK;
-    if (tori::memory::pmm::page_ref_count(old_page_phys) <= 1) {
-        pt->entries[pt_idx] = (pte | PTE_WRITABLE) & ~PTE_COW;
-        asm volatile("invlpg (%0)" : : "r"(cr2) : "memory");
-        return true;
-    }
-
-    // Allocate a new physical page.
-    uint64_t new_page_phys = tori::memory::pmm::alloc_page();
-    if (new_page_phys == tori::memory::pmm::invalid_physical_address) {
-        return false;
-    }
-
-    // Copy content from the old page.
-    auto* old_src = static_cast<volatile uint8_t*>(
-        tori::memory::address::physical_to_virtual(old_page_phys));
-    auto* new_dst = static_cast<volatile uint8_t*>(
-        tori::memory::address::physical_to_virtual(new_page_phys));
-    for (size_t i = 0; i < 4096; ++i) {
-        new_dst[i] = old_src[i];
-    }
-
-    // Update the PTE: replace physical address, set writable, clear COW.
-    // Preserve all other original flags (User, NX, WT, CD, PAT, Global, etc.).
-    uint64_t preserved = pte & ~(PTE_ADDR_MASK | PTE_WRITABLE | PTE_COW);
-    pt->entries[pt_idx] = (new_page_phys & PTE_ADDR_MASK) | preserved | PTE_WRITABLE;
-    tori::memory::pmm::free_page(old_page_phys);
-
-    asm volatile("invlpg (%0)" : : "r"(cr2) : "memory");
-
-    return true;
+    return thread->process ? thread->process->pml4_phys : 0;
 }
 
 // IDT entry (16 bytes)
@@ -207,8 +125,8 @@ void handle_exception(InterruptFrame *frame) {
     uint64_t cr2 = 0;
     asm volatile("mov %%cr2, %0" : "=r"(cr2));
 
-    // Try to resolve as a COW page fault before panicking.
-    if (handle_cow_fault(cr2, frame->error_code)) {
+    if (tori::memory::vmm::handle_cow_fault(
+            cr2, frame->error_code, current_user_pml4())) {
       return;
     }
 

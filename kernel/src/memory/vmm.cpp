@@ -394,6 +394,58 @@ uint64_t clone_address_space(uint64_t src_pml4_phys) {
     return dst_pml4_phys;
 }
 
+bool handle_cow_fault(uint64_t fault_address, uint64_t error_code, uint64_t pml4_phys) {
+    // COW fault: user-mode write to a present non-writable page.
+    if ((error_code & 0x7) != 0x7 || !pml4_phys) return false;
+
+    LockGuard guard(vmm_lock);
+
+    const uint64_t pml4_idx = (fault_address >> 39) & 0x1FF;
+    const uint64_t pdpt_idx = (fault_address >> 30) & 0x1FF;
+    const uint64_t pd_idx   = (fault_address >> 21) & 0x1FF;
+    const uint64_t pt_idx   = (fault_address >> 12) & 0x1FF;
+
+    PageTable* pml4 = get_table(pml4_phys);
+    if (!(pml4->entries[pml4_idx] & pte_present)) return false;
+
+    PageTable* pdpt = get_table(pml4->entries[pml4_idx] & pte_addr_mask);
+    if (!(pdpt->entries[pdpt_idx] & pte_present)) return false;
+
+    PageTable* pd = get_table(pdpt->entries[pdpt_idx] & pte_addr_mask);
+    if (!(pd->entries[pd_idx] & pte_present)) return false;
+
+    if (pd->entries[pd_idx] & pte_huge) return false;
+
+    PageTable* pt = get_table(pd->entries[pd_idx] & pte_addr_mask);
+    uint64_t pte = pt->entries[pt_idx];
+    if (!(pte & pte_present) || !(pte & pte_cow)) return false;
+
+    const uint64_t old_page_phys = pte & pte_addr_mask;
+    if (tori::memory::pmm::page_ref_count(old_page_phys) <= 1) {
+        pt->entries[pt_idx] = (pte | pte_writable) & ~pte_cow;
+        asm volatile("invlpg (%0)" : : "r"(fault_address) : "memory");
+        return true;
+    }
+
+    const uint64_t new_page_phys = alloc_page();
+    if (new_page_phys == invalid_physical_address) return false;
+
+    auto* old_src = static_cast<volatile uint8_t*>(
+        tori::memory::address::physical_to_virtual(old_page_phys));
+    auto* new_dst = static_cast<volatile uint8_t*>(
+        tori::memory::address::physical_to_virtual(new_page_phys));
+    for (uint64_t i = 0; i < 4096; ++i) {
+        new_dst[i] = old_src[i];
+    }
+
+    const uint64_t preserved = pte & ~(pte_addr_mask | pte_writable | pte_cow);
+    pt->entries[pt_idx] = (new_page_phys & pte_addr_mask) | preserved | pte_writable;
+    free_page(old_page_phys);
+
+    asm volatile("invlpg (%0)" : : "r"(fault_address) : "memory");
+    return true;
+}
+
 void free_address_space(uint64_t pml4_phys) {
     if (!pml4_phys) return;
 
