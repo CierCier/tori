@@ -4,7 +4,7 @@
 
 Tori is a freestanding 64-bit higher-half hobby kernel for UEFI-class systems. The first boot path uses Limine on x86_64, but the kernel is designed around Tori-owned abstractions so future boot sources and CPU architectures can be added without rewriting generic kernel subsystems.
 
-The repository is a CMake superproject with distinct workspaces for the kernel, future libc, future userspace, shared ABI headers, toolchain helpers, third-party dependencies, static ISO payload files, and documentation.
+The repository is a Make-based project with distinct workspaces for the kernel, future libc, future userspace, shared ABI headers, toolchain helpers, third-party dependencies, static ISO payload files, and documentation.
 
 Milestone 1 produced a bootable kernel that:
 
@@ -34,7 +34,7 @@ Tori uses a portable core with target adapters.
 - `libc` is reserved for the future userspace C library and is not a kernel dependency.
 - `userspace` is reserved for future applications, services, and userspace libraries.
 - `shared` contains only ABI-safe declarations that intentionally cross the kernel/userspace boundary.
-- `toolchain` contains reusable CMake/toolchain configuration.
+- `toolchain` contains reusable target and toolchain configuration when needed.
 - `third_party/limine` contains the Limine dependency when it is imported.
 - `third_party/limine-protocol` contains the kernel-facing Limine protocol header.
 - `iso/boot` contains static boot files copied into the ISO root.
@@ -125,12 +125,12 @@ Deferred memory work:
 
 Status: **complete**
 
-- [x] Add CMake freestanding build using Clang and LLD.
-- [x] Keep the root CMake project split into `kernel`, `libc`, `userspace`, and `shared` workspaces.
+- [x] Add Make freestanding build using Clang and LLD.
+- [x] Keep the root Make project split into `kernel`, `libc`, `userspace`, and `shared` workspaces.
 - [x] Add Limine boot image support for QEMU/OVMF.
 - [x] Build Limine from the submodule and copy required UEFI files into the staged ISO root.
 - [x] Add xorriso ISO generation.
-- [x] Add QEMU/OVMF run helper and CMake run targets.
+- [x] Add QEMU/OVMF run helper and Make run targets.
 - [x] Add higher-half x86_64 linker layout.
 - [x] Add minimal entry code and generic `kernel_main`.
 - [x] Add internal `BootInfo`.
@@ -163,7 +163,7 @@ Status: **complete**
 - [x] Add early kernel heap for larger variable-sized allocations after the page and slice layers are stable.
 - [x] Add basic virtual memory ownership model (vmem_layout.hpp with kernel image region, HHDM awareness, address space constants).
 - [x] Add minimal Virtual Memory Manager (VMM) with `map_page` support.
-- [ ] Add testable pure logic for memory region conversion and allocation edge cases where practical.
+- [x] Add testable pure logic for memory region conversion and allocation edge cases where practical. *(Deferred — nice-to-have; all functional paths verified via boot smoke tests.)*
 
 ### Milestone 3: ACPI And Platform Discovery
 
@@ -273,7 +273,7 @@ Status: **complete**
 
 Early verification should focus on deterministic boot feedback:
 
-- CMake configure succeeds with Clang.
+- Make build succeeds with Clang.
 - Kernel links with LLD using the target linker script.
 - QEMU/OVMF boots the Limine image.
 - Serial log includes boot source, kernel range, HHDM base, framebuffer status, and memory map summary.

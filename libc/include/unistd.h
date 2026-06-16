@@ -12,6 +12,11 @@ int execv(const char* path, char* const argv[]);
 pid_t getpid(void);
 pid_t getppid(void);
 pid_t waitpid(pid_t pid, int* status, int options);
+ssize_t read(int fd, void* buf, size_t count);
+int open(const char* path, int flags, ...);
+int close(int fd);
+off_t lseek(int fd, off_t offset, int whence);
+void* brk(void* addr);
 ssize_t write(int fd, const void* buf, size_t count);
 void _Exit(int status) __attribute__((noreturn));
 

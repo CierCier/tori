@@ -1,4 +1,4 @@
-#include "framebuffer_console.hpp"
+#include <tori/kernel/framebuffer_console.hpp>
 
 #include <stdint.h>
 

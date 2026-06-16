@@ -10,4 +10,6 @@ enum {
     E_INTR      = 4,
     E_INVALID   = 22,
     E_AGAIN     = 11,
+    E_BAD_FD    = 9,
+    E_NO_SPACE  = 6,
 };

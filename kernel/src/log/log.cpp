@@ -4,7 +4,7 @@
 #include <tori/kernel/time.hpp>
 #include <tori/kernel/timer.hpp>
 #include <tori/kernel/sync/spinlock.hpp>
-#include "framebuffer_console.hpp"
+#include <tori/kernel/framebuffer_console.hpp>
 #include "../arch/x86_64/serial.hpp"
 
 namespace {

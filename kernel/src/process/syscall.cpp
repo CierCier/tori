@@ -9,7 +9,9 @@
 #include <tori/kernel/pmm.hpp>
 #include <tori/kernel/vfs.hpp>
 #include <tori/kernel/task.hpp>
+#include <tori/kernel/address.hpp>
 #include "../arch/x86_64/serial.hpp"
+#include <tori/kernel/terminal.hpp>
 #include <tori/syscall.h>
 #include <tori/errno.h>
 #include <tori/types.h>
@@ -58,6 +60,11 @@ uint64_t sys_exec(Thread* thread, SyscallFrame* frame);
 uint64_t sys_spawn(Thread* thread, SyscallFrame* frame);
 uint64_t sys_waitpid(Thread* thread, SyscallFrame* frame);
 uint64_t sys_getppid(Thread* thread, SyscallFrame* frame);
+uint64_t sys_read(Thread* thread, SyscallFrame* frame);
+uint64_t sys_open(Thread* thread, SyscallFrame* frame);
+uint64_t sys_close(Thread* thread, SyscallFrame* frame);
+uint64_t sys_lseek(Thread* thread, SyscallFrame* frame);
+uint64_t sys_brk(Thread* thread, SyscallFrame* frame);
 
 } // namespace
 
@@ -77,6 +84,11 @@ extern "C" uint64_t handle_syscall(uint64_t number, tori::proc::SyscallFrame* fr
     case SYS_getpid:  return thread->process ? thread->process->pid : 0;
     case SYS_waitpid: return sys_waitpid(thread, frame);
     case SYS_getppid: return sys_getppid(thread, frame);
+    case SYS_read:    return sys_read(thread, frame);
+    case SYS_open:    return sys_open(thread, frame);
+    case SYS_close:   return sys_close(thread, frame);
+    case SYS_lseek:   return sys_lseek(thread, frame);
+    case SYS_brk:     return sys_brk(thread, frame);
     default:          return -E_INVALID;
     }
 }
@@ -142,6 +154,8 @@ pid_t process_spawn(const char* path) {
         return -E_NO_MEM;
     }
 
+    proc->brk = load_result.brk_base;
+    proc->brk_base = load_result.brk_base;
     proc->thread_list = thread;
     tori::sched::sched_enqueue(&thread->task);
 
@@ -297,6 +311,8 @@ uint64_t sys_exec(Thread* thread, SyscallFrame* frame) {
     tori::memory::vmm::free_address_space(proc->pml4_phys);
 
     proc->pml4_phys = new_pml4;
+    proc->brk = load_result.brk_base;
+    proc->brk_base = load_result.brk_base;
     thread->user_rip = load_result.entry;
     thread->user_rsp = load_result.stack_top;
     thread->task.cr3 = new_pml4;
@@ -375,6 +391,106 @@ uint64_t sys_getppid(Thread* thread, SyscallFrame* frame) {
         return thread->process->parent->pid;
     }
     return 0;
+}
+
+uint64_t sys_read(Thread* thread, SyscallFrame* frame) {
+    Process* proc = thread->process;
+    if (!proc) return -E_PERM;
+
+    int fd = static_cast<int>(frame->rdi);
+    char* buf = reinterpret_cast<char*>(frame->rsi);
+    size_t count = static_cast<size_t>(frame->rdx);
+
+    if (count == 0) return 0;
+
+    // fd 0 = stdin (keyboard terminal)
+    if (fd == 0) {
+        size_t out_len;
+        while (!tori::terminal::read_line(buf, count, &out_len)) {
+            tori::sched::yield();
+        }
+        return static_cast<uint64_t>(out_len);
+    }
+
+    // Regular VFS read
+    size_t out_read = 0;
+    int err = tori::vfs::read(fd, buf, count, &out_read);
+    if (err < 0) return static_cast<uint64_t>(static_cast<int>(err));
+    return static_cast<uint64_t>(out_read);
+}
+
+uint64_t sys_open(Thread* thread, SyscallFrame* frame) {
+    (void)thread;
+    const char* path_user = reinterpret_cast<const char*>(frame->rdi);
+    uint32_t flags = static_cast<uint32_t>(frame->rsi);
+
+    char path[256];
+    int err = copy_string_from_user(path_user, path, sizeof(path));
+    if (err < 0) return static_cast<uint64_t>(err);
+
+    int fd;
+    err = tori::vfs::open(nullptr, path, flags, &fd);
+    if (err < 0) return static_cast<uint64_t>(static_cast<int>(err));
+    return static_cast<uint64_t>(fd);
+}
+
+uint64_t sys_close(Thread* thread, SyscallFrame* frame) {
+    (void)thread;
+    int fd = static_cast<int>(frame->rdi);
+
+    int err = tori::vfs::close(fd);
+    if (err < 0) return static_cast<uint64_t>(static_cast<int>(err));
+    return 0;
+}
+
+uint64_t sys_lseek(Thread* thread, SyscallFrame* frame) {
+    (void)thread;
+    int fd = static_cast<int>(frame->rdi);
+    int64_t offset = static_cast<int64_t>(frame->rsi);
+    int whence = static_cast<int>(frame->rdx);
+
+    uint64_t new_pos = 0;
+    int err = tori::vfs::seek(fd, offset, whence, &new_pos);
+    if (err < 0) return static_cast<uint64_t>(static_cast<int>(err));
+    return new_pos;
+}
+
+uint64_t sys_brk(Thread* thread, SyscallFrame* frame) {
+    Process* proc = thread->process;
+    if (!proc) return static_cast<uint64_t>(static_cast<int>(-E_PERM));
+
+    uint64_t new_brk = frame->rdi;
+
+    // Query current break
+    if (new_brk == 0) return proc->brk;
+
+    // Cannot shrink below base
+    if (new_brk < proc->brk_base) return proc->brk;
+
+    uint64_t old_end = (proc->brk + 0xFFF) & ~0xFFFULL;
+    uint64_t new_end = (new_brk + 0xFFF) & ~0xFFFULL;
+
+    if (new_end > old_end) {
+        for (uint64_t page = old_end; page < new_end; page += 0x1000) {
+            uint64_t phys = tori::memory::pmm::alloc_page();
+            if (phys == tori::memory::pmm::invalid_physical_address) {
+                return static_cast<uint64_t>(static_cast<int>(-E_NO_MEM));
+            }
+
+            auto* hhdm = static_cast<uint8_t*>(
+                tori::memory::address::physical_to_virtual(phys));
+            for (size_t z = 0; z < 0x1000; ++z) hhdm[z] = 0;
+
+            auto flags = tori::memory::vmm::Flags::Present |
+                         tori::memory::vmm::Flags::Writable |
+                         tori::memory::vmm::Flags::User |
+                         tori::memory::vmm::Flags::NoExecute;
+            tori::memory::vmm::map_page(page, phys, flags, proc->pml4_phys);
+        }
+    }
+
+    proc->brk = new_brk;
+    return new_brk;
 }
 
 } // namespace

@@ -8,3 +8,8 @@
 #define SYS_getpid  5
 #define SYS_waitpid 6
 #define SYS_getppid 7
+#define SYS_read   8
+#define SYS_open   9
+#define SYS_close  10
+#define SYS_lseek  11
+#define SYS_brk    12

@@ -11,6 +11,7 @@
 #include <tori/kernel/vmm.hpp>
 #include <tori/kernel/process/thread.hpp>
 #include <tori/kernel/process/process.hpp>
+#include <tori/kernel/arch/ps2.hpp>
 
 #include "io.hpp"
 
@@ -172,6 +173,15 @@ extern "C" void handle_interrupt(InterruptFrame *frame) {
     return;
   }
 
+  // IRQ 1: PS/2 keyboard
+  if (vec == 33) {
+    tori::arch::x86_64::ps2::handle_irq();
+    // Send EOI to both PIC (master) and LAPIC
+    outb(0x20, 0x20);
+    lapic::eoi();
+    return;
+  }
+
   // Spurious IRQ or unknown: ignore
   if (vec >= 32) {
     lapic::eoi();
@@ -211,6 +221,15 @@ static void io_delay() { inb(0x80); }
 
 // Disable the local APIC so the legacy PIC delivers interrupts directly.
 // OVMF may enable the APIC, causing the CPU to ignore the PIC's INT line.
+void unmask_keyboard_irq() {
+  // Unmask IRQ1 on master PIC (clear bit 1)
+  uint8_t mask = inb(0x21);
+  mask &= ~0x02;
+  outb(0x21, mask);
+  io_delay();
+  TORI_LOG_INFO("pic", "IRQ1 (keyboard) unmasked on PIC");
+}
+
 void init_pic() {
   // Remap PIC so IRQs don't conflict with CPU exceptions (0-31)
   outb(0x20, 0x11);

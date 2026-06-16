@@ -120,6 +120,8 @@ int elf64_load(tori::vfs::Vnode *file, uint64_t pml4_phys, ElfLoadResult *out) {
     return -E_IO;
   }
 
+  uint64_t max_end = 0;
+
   for (uint16_t i = 0; i < ehdr.e_phnum; ++i) {
     auto &phdr = phdrs[i];
     if (phdr.p_type != PT_LOAD)
@@ -159,6 +161,8 @@ int elf64_load(tori::vfs::Vnode *file, uint64_t pml4_phys, ElfLoadResult *out) {
       }
 
       tori::memory::vmm::map_page(page, phys, flags, pml4_phys);
+
+      if (page_end > max_end) max_end = page_end;
 
       if (remaining_file > 0) {
         uint64_t page_off = (page == page_start) ? first_page_off : 0;
@@ -233,6 +237,7 @@ int elf64_load(tori::vfs::Vnode *file, uint64_t pml4_phys, ElfLoadResult *out) {
 
   out->entry = entry;
   out->stack_top = stack_top;
+  out->brk_base = max_end;
 
   TORI_LOG_INFO("elf", "ELF64 loaded");
   TORI_LOG_VALUE(tori::log::Level::Info, "elf", "entry", entry);

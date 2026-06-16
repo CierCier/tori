@@ -27,6 +27,9 @@ struct Process {
     Process* child_next;
     Process* child_prev;
     tori::sched::Task* wait_task;
+
+    uint64_t brk;          // current program break
+    uint64_t brk_base;     // initial program break (end of ELF BSS)
 };
 
 void init_process_system();

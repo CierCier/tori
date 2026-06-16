@@ -21,9 +21,11 @@
 #include <tori/kernel/task.hpp>
 #include <tori/kernel/time.hpp>
 #include <tori/kernel/timer.hpp>
+#include <tori/kernel/terminal.hpp>
 #include <tori/kernel/vfs.hpp>
 #include <tori/kernel/vmem_layout.hpp>
 #include <tori/kernel/vmm.hpp>
+#include <tori/kernel/arch/ps2.hpp>
 
 #include "../arch/x86_64/halt.hpp"
 
@@ -330,6 +332,13 @@ void kernel_main_task(void *);
     tori::arch::x86_64::lapic::init_timer(1000);
     tori::timer::init();
     tori::log::init_timer_flush();
+
+    // Route legacy PIC keyboard interrupt through LAPIC
+    tori::arch::x86_64::lapic::init_extint();
+    tori::arch::x86_64::ps2::init();
+    tori::arch::x86_64::unmask_keyboard_irq();
+    tori::terminal::init();
+    TORI_LOG_INFO("kernel", "PS/2 keyboard and terminal initialized");
   }
 
   tori::vfs::init();
@@ -497,6 +506,14 @@ void kernel_main_task(void *) {
   }
   TORI_LOG_VALUE(tori::log::Level::Info, "kernel", "init pid",
                  static_cast<uint64_t>(init_pid));
+
+  int sh_pid = tori::proc::process_spawn("/sys/sh");
+  if (sh_pid < 0) {
+    TORI_LOG_WARN("kernel", "failed to spawn /sys/sh");
+  } else {
+    TORI_LOG_VALUE(tori::log::Level::Info, "kernel", "sh pid",
+                   static_cast<uint64_t>(sh_pid));
+  }
 
   TORI_LOG_INFO("kernel", "kernel-main yielding forever");
   

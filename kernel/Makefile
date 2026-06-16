@@ -1,7 +1,7 @@
 # Kernel build system
 #
-# Usage (via CMake):
-#   make -f kernel/Makefile KERNEL_OUTPUT_DIR=<build_root>
+# Usage (via top-level Makefile):
+#   make kernel
 #
 # Standalone:
 #   make -f kernel/Makefile

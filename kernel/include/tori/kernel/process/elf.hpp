@@ -12,6 +12,7 @@ namespace tori::proc {
 struct ElfLoadResult {
     uint64_t entry;
     uint64_t stack_top;
+    uint64_t brk_base;     // highest mapped virtual address (heap start)
 };
 
 constexpr uint64_t user_stack_base = 0x00007FFFF0000000ULL;

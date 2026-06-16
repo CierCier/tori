@@ -127,4 +127,16 @@ void init_timer(uint32_t frequency_hz) {
     TORI_LOG_VALUE(tori::log::Level::Info, "lapic", "ticks per period", ticks_per_period);
 }
 
+void init_extint() {
+    // Configure LINT0 for ExtINT delivery mode (legacy PIC passthrough)
+    // and unmask it so PIC-generated interrupts reach the CPU.
+    uint32_t lint0 = read_reg(reg_lvt_lint0);
+    lint0 &= ~(1 << 16);      // unmask
+    lint0 &= ~0x700;          // clear delivery mode bits
+    lint0 |= 0x700;           // ExtINT (111)
+    write_reg(reg_lvt_lint0, lint0);
+
+    TORI_LOG_INFO("lapic", "LINT0 configured for ExtINT");
+}
+
 } // namespace tori::arch::x86_64::lapic

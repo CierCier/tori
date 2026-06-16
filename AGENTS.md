@@ -4,15 +4,15 @@
 
 Tori is a freestanding 64-bit hobby kernel for modern UEFI systems. The first implemented target is `x86_64 + Limine + UEFI PC`, but the codebase must be structured so boot protocols, CPU architectures, and platform assumptions can be replaced later.
 
-The kernel is written in freestanding C++ with C and assembly at ABI-sensitive boundaries. The default toolchain is Clang, LLD, and CMake.
+The kernel is written in freestanding C++ with C and assembly at ABI-sensitive boundaries. The default toolchain is Clang, LLD, and GNU Make.
 
-The repository is organized as a CMake superproject with separate workspaces:
+The repository is organized as a Make-based project with separate workspaces:
 
 - `kernel`: freestanding kernel sources and kernel-only headers.
 - `libc`: future userspace C library; the kernel must not link against it.
 - `userspace`: future applications, services, and userspace libraries.
 - `shared`: ABI-safe declarations intentionally shared across kernel and userspace.
-- `toolchain`: CMake helpers, target files, and cross-build configuration.
+- `toolchain`: reusable target files and cross-build configuration when needed.
 - `third_party`: imported external projects, including Limine.
 - `iso`: static files copied into the staged ISO root.
 - `docs`: design notes and project documentation.
@@ -34,7 +34,7 @@ Expected responsibility split:
 - `kernel/src/kernel`: architecture-independent kernel initialization and core runtime flow.
 - `kernel/src/log`: kernel logging implementation.
 - `kernel/src/memory`: kernel memory map modeling and later allocators.
-- `kernel/targets/x86_64-limine`: linker script, target CMake configuration, Limine config, boot image layout, and QEMU helpers.
+- `kernel/targets/x86_64-limine`: linker script, target configuration, Limine config, boot image layout, and QEMU helpers.
 - `iso/boot`: bootloader configuration and static boot files included in the ISO.
 - `iso/rootfs`: initial root filesystem payload included in the ISO.
 
@@ -72,7 +72,7 @@ Logging is a core subsystem, not ad hoc printing.
 
 Once implementation starts, changes should keep these checks in mind:
 
-- Configure and build with CMake using Clang and LLD.
+- Build with Make using Clang and LLD.
 - Boot under QEMU with OVMF through Limine.
 - Use `scripts/run-qemu.sh -noreboot` to build the ISO and boot it under QEMU.
 - The `run-qemu` script will also route serial output from COM1 to stdout.

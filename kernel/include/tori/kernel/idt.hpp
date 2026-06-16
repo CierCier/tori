@@ -20,6 +20,7 @@ extern "C" void handle_interrupt(InterruptFrame* frame);
 
 void init_idt();
 void init_pic();
+void unmask_keyboard_irq();
 void init_pit();
 uint64_t timer_tick_count();
 

@@ -4,8 +4,6 @@ set -eu
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 
 build_dir=${TORI_BUILD_DIR:-"$repo_root/build"}
-cc=${CC:-clang}
-cxx=${CXX:-clang++}
 ovmf_code=${TORI_OVMF_CODE:-/usr/share/edk2/x64/OVMF_CODE.4m.fd}
 ovmf_vars_template=${TORI_OVMF_VARS_TEMPLATE:-/usr/share/edk2/x64/OVMF_VARS.4m.fd}
 ovmf_vars="$build_dir/OVMF_VARS.4m.fd"
@@ -23,14 +21,11 @@ if [ ! -f "$ovmf_vars_template" ]; then
     exit 1
 fi
 
-cmake -S "$repo_root" -B "$build_dir" \
-    -DCMAKE_C_COMPILER="$cc" \
-    -DCMAKE_CXX_COMPILER="$cxx" \
-    -DTORI_OVMF_CODE="$ovmf_code" \
-    -DTORI_OVMF_VARS_TEMPLATE="$ovmf_vars_template"
-
-cmake --build "$build_dir" --target iso
-cmake -E copy_if_different "$ovmf_vars_template" "$ovmf_vars"
+make -C "$repo_root" iso \
+    TORI_BUILD_DIR="$build_dir" \
+    TORI_OVMF_CODE="$ovmf_code" \
+    TORI_OVMF_VARS_TEMPLATE="$ovmf_vars_template"
+cp "$ovmf_vars_template" "$ovmf_vars"
 
 exec qemu-system-x86_64 \
     -machine q35 \

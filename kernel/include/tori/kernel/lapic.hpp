@@ -28,6 +28,7 @@ constexpr uint32_t reg_timer_divider = 0x3E0;
 void init(uint64_t physical_base);
 void eoi();
 void init_timer(uint32_t frequency_hz);
+void init_extint();
 
 uint32_t id();
 uint32_t version();

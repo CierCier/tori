@@ -11,23 +11,22 @@ git submodule update --init --recursive
 ```
 
 ```sh
-cmake -S . -B build -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
-cmake --build build --target kernel-image
+make kernel
 ```
 
 The kernel ELF is written to:
 
 ```text
-build/boot/kernel.elf
+build/kernel-build/boot/kernel.elf
 ```
 
 ## Stage ISO Root
 
 ```sh
-cmake --build build --target tori_iso_root
+make iso-root
 ```
 
-The first `tori_iso_root` build may run Limine's bootstrap step, then configure and build Limine with x86_64 UEFI support.
+The first `iso-root` build may run Limine's bootstrap step, then configure and build Limine with x86_64 UEFI support.
 
 This creates:
 
@@ -44,12 +43,12 @@ build/iso-root/
   rootfs/
 ```
 
-Static files under `iso/boot` and `iso/rootfs` are copied into `build/iso-root`. The kernel ELF and Limine UEFI files are generated or built artifacts and are copied into the staged tree by CMake.
+Static files under `iso/boot` and `iso/rootfs` are copied into `build/iso-root`. The kernel ELF and Limine UEFI files are generated or built artifacts and are copied into the staged tree by Make.
 
 ## Create Bootable ISO
 
 ```sh
-cmake --build build --target iso
+make iso
 ```
 
 This creates:
@@ -63,7 +62,7 @@ The ISO uses Limine's UEFI CD image and is generated with `xorriso`.
 ## Run In QEMU
 
 ```sh
-cmake --build build --target run
+make run
 ```
 
 Or use the helper:
@@ -79,15 +78,15 @@ This boots `build/tori.iso` with QEMU and OVMF. By default the project expects:
 /usr/share/edk2/x64/OVMF_VARS.4m.fd
 ```
 
-Override these with `TORI_OVMF_CODE` and `TORI_OVMF_VARS_TEMPLATE` CMake cache variables if your distribution uses different paths.
+Override these with `TORI_OVMF_CODE` and `TORI_OVMF_VARS_TEMPLATE` if your distribution uses different paths.
 
 The helper also accepts `TORI_BUILD_DIR`, `TORI_QEMU_MEMORY`, `CC`, and `CXX`, and forwards any extra arguments to `qemu-system-x86_64`.
 
 There is also a FAT disk image path for UEFI testing:
 
 ```sh
-cmake --build build --target tori_uefi_disk
-cmake --build build --target tori_run_qemu_disk
+make uefi-disk
+make run-disk
 ```
 
 ## Current Kernel Behavior
